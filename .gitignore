@@ -1,0 +1,41 @@
+# Python environments and generated builds
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+dist/
+build/
+*.egg-info/
+
+# Local configuration, credentials and editor state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.codex/
+.agents/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Generated captures, training data and duplicate packaged workspace
+/datasets/
+/exports/
+/output/
+/TrainingData_2000/
+/TaperedPipeStudio/
+/projects/
+/flashlight_lab/output/
+*.log
+*.tmp
+*.blend[0-9]*
+/*_runtime.json
+/desktop_settings.json
+
+# Keep verification source; reports and local experiments are reproducible.
+/verification/*
+!/verification/*.py

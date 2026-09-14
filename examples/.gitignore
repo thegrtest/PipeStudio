@@ -1,0 +1,21 @@
+# Publish editable workspaces and a few previews, not generated sample batches.
+*
+!*/
+!.gitignore
+!**/README.md
+!Tapered Pipe.blend
+!brass-v4/Brass Surface V4.blend
+!brass-v4/godslight_surface_comparison.jpg
+!brass-v4/machine_surface_comparison.jpg
+!button-track/Brass Button Track.blend
+!inspection-modes/Inspection Studio.blend
+!challenge-v3/Inspection Realism V3.blend
+!realism-v2/Inspection Realism V2.blend
+!reference-match/Inspection Environments.blend
+!rolling-shells/Rolling shell capture.blend
+!rolling-shells/Infinite shell conveyor.blend
+!rolling-shells/Open Rolling Capture.cmd
+!rolling-shells/preview.png
+!rolling-shells/shells-rolling-loop.mp4
+!rolling-shells/dirty-defect-loop/Dirty defect conveyor.blend
+!rolling-shells/dirty-defect-loop/dirty-defects-rolling-loop.mp4
