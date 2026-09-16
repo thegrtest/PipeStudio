@@ -1,0 +1,28 @@
+{
+  "nodes": {
+    "desktop": {
+      "transport": "local",
+      "python": "C:/PATH/TO/PipeStudio/.venv/Scripts/python.exe",
+      "root": "C:/PATH/TO/PipeStudio/.cache/fleet-node",
+      "blender": ["C:/Program Files/Blender Foundation/Blender 5.1/blender.exe"],
+      "env": {"PIPESTUDIO_CYCLES_BACKEND": "OPTIX"},
+      "threads": 8, "chunk": 8, "weight": 8, "ready": false
+    },
+    "spark": {
+      "transport": "ssh", "alias": "pipestudio-spark",
+      "python": "/home/USER/PipeStudio/.venv/bin/python",
+      "root": "/home/USER/PipeStudio/.cache/fleet-node",
+      "blender": ["bash", "{release}/remote/blender_spark.sh"],
+      "env": {"PIPESTUDIO_CYCLES_BACKEND": "OPTIX"},
+      "threads": 12, "chunk": 4, "weight": 4, "ready": false
+    },
+    "agx": {
+      "transport": "ssh", "alias": "pipestudio-agx",
+      "python": "/home/USER/PipeStudio/.venv/bin/python",
+      "root": "/home/USER/PipeStudio/.cache/fleet-node",
+      "blender": ["bash", "{release}/remote/blender_agx.sh"],
+      "env": {"PIPESTUDIO_CYCLES_BACKEND": "CUDA"},
+      "threads": 6, "chunk": 2, "seconds_per_image": 600, "weight": 1, "ready": false
+    }
+  }
+}

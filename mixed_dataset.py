@@ -15,7 +15,7 @@ KINDS=('NONE','FOLD','DENT')
 FOLD_STYLE_WEIGHTS={'FOLD':(0.18, 0.20, 0.16, 0.14, 0.16, 0.16)}
 STYLES={'FOLD':('DEFAULT','ELONGATED','DOUBLE','OBLIQUE','WRINKLED','BRANCHED'),
         'DENT':('DEFAULT','ELONGATED','DOUBLE','OBLIQUE','WRINKLED')}
-FEATURES={'FOLD':{'DEFAULT':'fold_rolled_lip','ELONGATED':'fold_rolled_lip','OBLIQUE':'fold_rolled_lip',
+FEATURES={'FOLD':{'DEFAULT':'fold_rolled_lip','ELONGATED':'fold_rolled_lip','DOUBLE':'fold_nested_crease','OBLIQUE':'fold_rolled_lip',
                   'WRINKLED':'fold_nested_crease','BRANCHED':'fold_converging_tracks'},
           'DENT':{'DEFAULT':'dent_shallow_oval','ELONGATED':'dent_axial_trough','DOUBLE':'dent_cluster',
                   'OBLIQUE':'dent_oblique_shoulder','WRINKLED':'dent_nested_neck'}}

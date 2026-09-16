@@ -8,6 +8,15 @@ import sys
 import time
 
 
+def collection_python(root):
+    """Use the project virtual environment on either Windows or Linux."""
+    relative = 'Scripts/python.exe' if os.name == 'nt' else 'bin/python'
+    executable = Path(root) / '.venv' / relative
+    if not executable.is_file():
+        raise RuntimeError(f'The collection Python runtime is missing: {executable}')
+    return executable
+
+
 def read(path):
     try:return json.loads(Path(path).read_text(encoding='utf-8'))
     except (OSError,ValueError):return {}

@@ -2,7 +2,7 @@ import math
 import unittest
 from collections import Counter
 from dataclasses import replace
-from geometry import (DEFECT_STYLES, PipeSpec, build_mesh, displacement,
+from geometry import (DEFECT_STYLES, DENT_STYLES, FOLD_STYLES, PipeSpec, build_mesh, displacement,
                       random_spec, mask_bbox, yolo_box, radius_at, sampling_grid)
 
 
@@ -74,7 +74,7 @@ class GeometryTests(unittest.TestCase):
                     self.assertLess(abs(left-right), 1e-12)
 
     def test_rotation_uses_physical_tangent_plane(self):
-        for style in ('DEFAULT', 'ELONGATED', 'DOUBLE', 'WRINKLED', 'BRANCHED'):
+        for style in ('DEFAULT', 'ELONGATED', 'DOUBLE', 'WRINKLED', 'BRANCHED', 'AXIAL_PINCH'):
             s = PipeSpec(defect_style=style, irregularity=0.35, width=0.06, arc=20)
             r = radius_at(s.position, s)
             # An off-center sample is rotated geometrically, not re-indexed in
@@ -205,6 +205,66 @@ class GeometryTests(unittest.TestCase):
             self.assertTrue(all(b-a>1e-10 for a,b in zip(angles, angles[1:])))
             self.assertGreater(math.tau-angles[-1], 1e-10)
 
+    def test_axial_pinch_has_long_depression_unequal_lips_and_tapered_ends(self):
+        s = PipeSpec(length=8, radius=.9, taper_start=.80, taper_end=.90,
+                     defect='FOLD', defect_style='AXIAL_PINCH', position=.86,
+                     width=.032, arc=15, depth=.07, irregularity=.25,
+                     secondary_strength=.35, seed=42)
+        r = radius_at(s.position, s)
+        points = []
+        for i in range(-60, 61):
+            u = i/30
+            for j in range(-45, 46):
+                v = j/30
+                t, theta = s.position+u*s.width, math.radians(s.angle+v*s.arc)
+                delta, mask = displacement(t, theta, s)
+                if delta < -s.depth*radius_at(t, s)*.15:
+                    points.append((u*s.width*s.length, v*math.radians(s.arc)*r))
+                    self.assertEqual(mask, 1)
+        axial_extent = max(x for x,y in points)-min(x for x,y in points)
+        cross_extent = max(y for x,y in points)-min(y for x,y in points)
+        self.assertGreater(axial_extent, 3*cross_extent)
+        line = [(j/100, displacement(s.position, math.radians(s.angle+j/100*s.arc), s)[0])
+                for j in range(-130, 131)]
+        left_lip = max(amount for v,amount in line if v<0)
+        right_lip = max(amount for v,amount in line if v>0)
+        self.assertGreater(max(left_lip,right_lip), s.depth*r*.035)
+        self.assertGreater(max(left_lip,right_lip), 2*min(left_lip,right_lip))
+        # The same seed morphs from a slit into a broader pocket, rather than
+        # becoming a repeated second defect or an open cut through the wall.
+        counts = []
+        for strength in (0.1, 0.9):
+            specimen = replace(s, secondary_strength=strength)
+            counts.append(sum(displacement(s.position, math.radians(s.angle+j*.2), specimen)[0]
+                              < -s.depth*r*.25 for j in range(-100,101)))
+        self.assertGreater(counts[1], counts[0]*1.4)
+        for sign in (-1, 1):
+            for distance in (2.1, 2.11, 3):
+                self.assertEqual(displacement(s.position+sign*distance*s.width,
+                                              math.radians(s.angle), s), (0.0,0.0))
+
+    def test_axial_pinch_adaptive_grid_resolves_small_slit_and_lip(self):
+        from bisect import bisect_right
+        # A small real-camera-sized shoulder crease; interpolation of the
+        # actual sampling grid must retain both sides of its narrow profile.
+        for turn in (0, 14, -28):
+            s = PipeSpec(length=8, radius=.9, taper_start=.80, taper_end=.90,
+                         defect='FOLD', defect_style='AXIAL_PINCH', position=.86,
+                         angle=180, width=.018, arc=8, depth=.04,
+                         defect_rotation=turn, secondary_strength=.1)
+            ts, angles = sampling_grid(s, 144, 128, adaptive=True)
+            self.assertLessEqual(2*len(ts)*len(angles), 200000)
+            peak = s.depth*radius_at(s.position,s)
+            for dt in (-.004, 0, .004):
+                t = s.position+dt
+                for j in range(-100, 101):
+                    theta = math.radians(s.angle+j*.08)
+                    index = bisect_right(angles,theta)-1
+                    a,b = angles[index:index+2]
+                    left,right = displacement(t,a,s)[0], displacement(t,b,s)[0]
+                    interpolated = left+(right-left)*(theta-a)/(b-a)
+                    self.assertLess(abs(interpolated-displacement(t,theta,s)[0])/peak,.04)
+
     def test_adaptive_wall_is_closed_nested_and_exactly_follows_displacement(self):
         s = PipeSpec(defect='FOLD', defect_style='OBLIQUE', defect_rotation=40,
                      angle=359, position=.94, width=.05, arc=12,
@@ -320,15 +380,21 @@ class GeometryTests(unittest.TestCase):
     def test_randomization_covers_styles_and_observed_orientation_families(self):
         specimens = [random_spec(PipeSpec(), seed, 150) for seed in range(256)]
         self.assertEqual(specimens, [random_spec(PipeSpec(), seed, 150) for seed in range(256)])
-        self.assertEqual({s.defect_style for s in specimens}, set(DEFECT_STYLES))
+        # The general-purpose randomizer retains its legacy distribution;
+        # new eval-derived families are selected by the YOLOX plan recipe.
+        self.assertEqual({s.defect_style for s in specimens}, set(DENT_STYLES)|set(FOLD_STYLES))
         self.assertTrue(all(-75 <= s.defect_rotation <= 75 for s in specimens))
         self.assertTrue(all(0.25 <= s.secondary_strength <= 1 for s in specimens))
-        for kind in ('DENT', 'FOLD'):
-            self.assertEqual({s.defect_style for s in specimens if s.defect == kind}, set(DEFECT_STYLES))
+        for kind,styles in (('DENT',DENT_STYLES),('FOLD',FOLD_STYLES)):
+            self.assertEqual({s.defect_style for s in specimens if s.defect == kind}, set(styles))
         folds = [s for s in specimens if s.defect == 'FOLD']
-        axial = [s for s in folds
-                 if 45 <= s.defect_rotation + (28 if s.defect_style == 'OBLIQUE' else 0) <= 75]
-        self.assertGreater(len(axial)/len(folds), 0.60)
+        pinches = [s for s in folds if s.defect_style=='AXIAL_PINCH']
+        self.assertTrue(.45 < len(pinches)/len(folds) < .75)
+        self.assertTrue(all(abs(s.defect_rotation)<=28 for s in pinches))
+        self.assertGreater(sum(abs(s.defect_rotation)<=14 for s in pinches)/len(pinches), .70)
+        legacy = [s for s in folds if s.defect_style!='AXIAL_PINCH']
+        self.assertTrue(any(s.defect_rotation < -35 for s in legacy))
+        self.assertTrue(any(s.defect_rotation > 35 for s in legacy))
         dents = [s for s in specimens if s.defect == 'DENT']
         self.assertTrue(any(s.defect_rotation == 0 for s in dents))
         self.assertTrue(any(s.defect_rotation < -40 for s in dents))

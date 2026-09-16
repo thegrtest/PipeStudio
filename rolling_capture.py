@@ -237,13 +237,13 @@ def run_job(path):
 
 
 def start_supervisor(folder,blender):
-    from rolling_supervisor import is_active
+    from rolling_supervisor import is_active,collection_python
     if is_active(folder):raise RuntimeError('This collection is already running.')
-    python=ROOT/'.venv/Scripts/python.exe'
-    if not python.exists():raise RuntimeError('The collection Python runtime is missing.')
+    python=collection_python(ROOT)
     with (folder/'supervisor.log').open('a',encoding='utf-8') as log:
         return subprocess.Popen([str(python),str(ROOT/'rolling_supervisor.py'),str(folder),'--blender',blender],
             cwd=str(ROOT),stdout=log,stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,start_new_session=sys.platform!='win32',
             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
 
 

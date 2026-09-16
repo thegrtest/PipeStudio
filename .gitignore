@@ -35,6 +35,7 @@ Desktop.ini
 *.blend[0-9]*
 /*_runtime.json
 /desktop_settings.json
+/fleet_nodes.local.json
 
 # Keep verification source; reports and local experiments are reproducible.
 /verification/*

@@ -1,5 +1,36 @@
 # Pipe Studio
 
+For tapered brass datasets matched to the inspection cameras, see
+[camera-matched generation](DOMAIN_REALISM.md). **Open Camera Matched Pipe
+Studio.cmd** opens the Blender controls; **Generate Camera Matched Dataset.cmd**
+starts a balanced 3,200-image cycle with resumable exports.
+
+**Fleet Dashboard.cmd** opens a lightweight local monitor for the desktop, DGX
+Spark and AGX. See [three-device generation](remote/FLEET.md) for preparing,
+starting, stopping and collecting distributed runs.
+**Update and Ready Fleet.cmd** sends changed files, checks the current renderer
+on all three devices and stages a batch. **Start Fleet Generation.cmd** performs
+those checks automatically and then starts production.
+
+The current generator covers eight camera environments with native reference
+dimensions, mixed folds/dents/soap/oil defects, localized brass detail, a glare
+guard, and slight lighting and camera-softness variation. Synthetic labels use
+0 Fold, 1 Dent, 2 Soap stain, and 3 Oil stain. The default domain plan includes
+10% good specimens; the optional fleet defects-only setting balances the four
+defect classes. See [YOLOX preparation](YOLOX_TRANSFER_PLAN.md) and
+[realism references](REALISM_RESOURCES.md).
+
+After configuring the devices in `fleet_nodes.local.json`, start 5,000 unique
+specimens **on each device** with:
+
+```powershell
+powershell -File remote/Fleet.ps1 -Action Launch -Count 5000 -PerNode -Quality full
+```
+
+This starts generation; opening the camera-matched Blender workspace alone does
+not. Each saved fleet run carries an immutable renderer snapshot, so editing or
+updating this checkout does not alter running jobs.
+
 ## Clone and open the current workspace
 
 This repository contains the Python source, shell artwork, reference images,
@@ -14,13 +45,12 @@ cd PipeStudio
 git lfs pull
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-& '.\examples\rolling-shells\Open Rolling Capture.cmd'
+& '.\Open Camera Matched Pipe Studio.cmd'
 ```
 
-The rolling workspace is the latest shell inspection scene. Its saved dirt,
-dust, and groove residue settings are **off**. Opening it does not start image
-collection. Use the **Rolling Capture** sidebar to explicitly start or stop a
-collection; see [rolling capture instructions](examples/rolling-shells/README.md).
+The camera-matched launcher opens the current tapered-pipe controls. The optional
+rolling workspace remains available through `examples/rolling-shells/Open Rolling
+Capture.cmd`; see [rolling capture instructions](examples/rolling-shells/README.md).
 The launchers expect Blender at
 `C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`; edit that path if
 your installation differs. Blender supplies its own `bpy` and NumPy modules;
@@ -45,17 +75,13 @@ They do not render new images. For the optional legacy desktop build, install
 `requirements-build.txt` and run **Build App.ps1**. Video encoding scripts also
 require `ffmpeg` and `ffprobe` on PATH.
 
-### Test baseline at initial publication
+### Tests
 
-The existing nine root unit-test modules ran 77 tests: 73 passed, one failed,
-and three errored. The existing tapered-pipe issues are a fold-orientation
-distribution assertion in `test_geometry.py` and a missing `DOUBLE` feature
-mapping in `mixed_dataset.py` (three tests). These are retained in this initial
-project snapshot. Publishing the repository does not regenerate datasets or
-change scene geometry. Run the same checks with:
+The root test suite covers settings, geometry, dataset integrity, class/camera
+allocation, surface details, optical variation and fleet management. Run it with:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest test_app_model test_brass_finishes test_generation_plan test_geometry test_mixed_dataset test_plastic_dents test_product_modes test_shell_appearance test_dataset_tools
+.\.venv\Scripts\python.exe -m unittest discover -p 'test_*.py'
 ```
 
 The Blender workspace now includes **Tapered pipe** and **Flashlight** modes in the **Inspection Studio** sidebar. Open **Open Inspection Workspace.cmd** to use the integrated scene. Each mode retains its own environment and settings while sharing applicable defect, lighting, camera and export controls. See [Blender product modes](INSPECTION_MODES.md). The desktop app remains unchanged.

@@ -13,6 +13,7 @@ compositor. Repeated enable/disable calls are safe.
 
 import bpy
 from shell_appearance import POLYMER_DEFAULTS
+from domain_profiles import optical_response, optical_reference_width
 
 
 OWNER = 'pipe_studio_camera_response'
@@ -73,7 +74,7 @@ def configure_camera_response(scene, settings):
     """Configure a subtle editable response, preserving unrelated node trees.
 
     Settings accepts either a dictionary or Pipe Studio's property group.
-    STUDIO is a direct pass-through. Inspection presets retain their framing;
+    STUDIO passes through unless extra camera softness is requested. Presets retain their framing;
     the graph has no distortion, crop, resampling, or vignette operations.
     """
     tree = _make_graph(scene)
@@ -81,9 +82,12 @@ def configure_camera_response(scene, settings):
         return False
     environment = _value(settings, 'environment', 'STUDIO')
     resolution = max(1, int(_value(settings, 'resolution', scene.render.resolution_x)))
-    enabled = environment in {'MACHINE', 'GODSLIGHT','BUTTON_TRACK'}
-    reference_width = 1200 if environment=='BUTTON_TRACK' else (1600 if environment == 'MACHINE' else 1936)
-    nominal_sigma = .50 if environment == 'MACHINE' else .55
+    inspection = environment in {'MACHINE', 'GODSLIGHT','BUTTON_TRACK'}
+    reference_width = optical_reference_width(settings)
+    response = optical_response(settings)
+    nominal_sigma = response['total_sigma_at_reference']
+    extra = response['extra_sigma_at_reference']
+    enabled = inspection or extra>0
     if environment=='BUTTON_TRACK':
         nominal_sigma=_value(settings,'inspection_softness',POLYMER_DEFAULTS['inspection_softness'])
     sigma = nominal_sigma * resolution / reference_width
@@ -97,13 +101,16 @@ def configure_camera_response(scene, settings):
     # consistent with sigma=.5 px. Size=.5 has effectively no optical effect.
     blur.inputs['Size'].default_value = (sigma * 3, sigma * 3)
     blur.mute = not enabled or sigma<=0
-    scatter=_value(settings,'inspection_scatter',.065) if environment=='BUTTON_TRACK' else (.055 if environment == 'MACHINE' else .035)
+    scatter=_value(settings,'inspection_scatter',.065) if environment=='BUTTON_TRACK' else response['scatter']
+    glare.inputs['Threshold'].default_value = 2.5 if environment=='BUTTON_TRACK' else response['threshold']
     glare.inputs['Strength'].default_value = scatter
     glare.inputs['Size'].default_value = .010 if environment=='BUTTON_TRACK' else .015
-    glare.mute = not enabled or scatter<=0
+    glare.mute = not inspection or scatter<=0
     scene['pipe_camera_response_status'] = ('Subpixel optics and restrained highlight scatter'
                                              if enabled else 'Studio optical response bypassed')
     scene['pipe_camera_response_sigma_px'] = sigma if enabled else 0.0
+    scene['pipe_camera_softness_px'] = extra * resolution / reference_width
+    scene['pipe_camera_response_scatter'] = scatter if inspection else 0.0
     scene['pipe_camera_response_calibrated'] = False
     return True
 

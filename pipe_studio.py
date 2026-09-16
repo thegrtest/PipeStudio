@@ -46,7 +46,8 @@ EXTRA_KEYS = ("roughness", "texture_strength", "key_power", "key_angle", "fill_p
               "background", "camera_yaw", "camera_elevation", "focus_blur", "resolution", "samples",
               "wear", "light_softness", "color_cast", "sensor_noise", "environment", "camera_zoom",
               "camera_shift_x", "camera_shift_y", "frame_aspect", "ambient_strength", "brass_green", "rim_power", "tone_mapping",
-              "lighting_profile", "light_azimuth", "key_span", "finish_marks", "oxide_amount", "polish_amount") + tuple(PRODUCT_DEFAULTS)
+              "lighting_profile", "light_azimuth", "key_span", "finish_marks", "oxide_amount", "polish_amount",
+              "capture_view","inspection_camera","capture_session","optical_blur","highlight_scatter","camera_softness") + tuple(PRODUCT_DEFAULTS)
 
 
 def settings_dict(p):
@@ -114,7 +115,11 @@ def configure_renderer(scene):
     scene.view_settings.view_transform = 'AgX'
     prefs = bpy.context.preferences.addons['cycles'].preferences
     device = 'CPU'
-    for backend in ('OPTIX', 'CUDA', 'HIP', 'METAL'):
+    requested_backend = os.environ.get('PIPESTUDIO_CYCLES_BACKEND')
+    backends = ('OPTIX', 'CUDA', 'HIP', 'METAL')
+    if requested_backend and requested_backend not in backends:
+        raise ValueError('Unsupported PIPESTUDIO_CYCLES_BACKEND: '+requested_backend)
+    for backend in ((requested_backend,) if requested_backend else backends):
         try:
             prefs.compute_device_type = backend
             prefs.refresh_devices()
@@ -127,6 +132,8 @@ def configure_renderer(scene):
                 break
         except (TypeError, RuntimeError):
             continue
+    if requested_backend and device == 'CPU':
+        raise RuntimeError('Requested GPU backend is unavailable: '+requested_backend)
     scene['pipe_device'] = device
 
 
@@ -209,7 +216,8 @@ def setup_scene(scene):
     make_light(collection,'Rim',(-1,2,4),650,5,.5)
     make_light(collection,'Bounce',(-3,-3,1),5,3,7)
     from inspection_scene import build_machine, build_godslight
-    for obj in build_machine(collection)+build_godslight(collection):
+    from capture_scene import build_capture
+    for obj in build_machine(collection)+build_godslight(collection)+build_capture(collection):
         obj['pipe_beauty_materials']=[m.name for m in obj.data.materials] if hasattr(obj.data,'materials') else []
     scene.world=bpy.data.worlds.new(PREFIX+'World')
     scene.world.use_nodes=True
@@ -259,14 +267,17 @@ def refresh(scene,geometry=False):
         rebuild_pipe(scene)
     upright=p.environment=='MACHINE'
     pipe=bpy.data.objects[PREFIX+'Pipe']
-    pipe.rotation_euler=(0,-math.pi/2 if upright else 0,0)
+    inverted=upright and p.capture_view=='INVERTED'
+    pipe.rotation_euler=(0,(math.pi/2 if inverted else -math.pi/2) if upright else 0,0)
+    if upright and p.capture_view in ('UPRIGHT','FOREGROUND'):
+        pipe.rotation_euler.y-=.070 if p.capture_view=='FOREGROUND' else .020
     lip=pipe.modifiers.get('Cut edge rounding')
     if lip:
         lip.width=p.radius*p.wall_ratio*.12
     cam=bpy.data.objects[PREFIX+'Camera']
     yaw,elevation=math.radians(p.camera_yaw),math.radians(p.camera_elevation)
     distance=60 if upright else 24 if p.environment=='GODSLIGHT' else 12
-    target=(0,0,p.length*.12 if upright else 0)
+    target=(0,0,p.length*(-.12 if inverted else .12) if upright else 0)
     cam.location=(distance*math.sin(yaw)*math.cos(elevation),-distance*math.cos(yaw)*math.cos(elevation),
                   target[2]+distance*math.sin(elevation))
     aim(cam,target)
@@ -330,7 +341,7 @@ def refresh(scene,geometry=False):
     floor.hide_render=p.environment!='STUDIO'; floor.hide_set(floor.hide_render)
     for obj in bpy.data.collections[PREFIX+'Studio'].objects:
         if obj.name.startswith('PS_EnvMachine_'):
-            obj.hide_render=not upright; obj.hide_set(obj.hide_render)
+            obj.hide_render=not upright or p.capture_view!='ORIGINAL'; obj.hide_set(obj.hide_render)
         elif obj.name.startswith('PS_EnvGods_'):
             obj.hide_render=p.environment!='GODSLIGHT'; obj.hide_set(obj.hide_render)
     colors={'DARK':(.018,.025,.035,1),'GREY':(.19,.22,.25,1),'GREEN':(.075,.10,.035,1)}
@@ -342,6 +353,10 @@ def refresh(scene,geometry=False):
     scene.cycles.samples=p.samples
     scene.cycles.seed=p.seed
     configure_camera_response(scene,p)
+    from capture_scene import configure_capture
+    configure_capture(scene,p)
+    from inspection_scene import configure_inspection_camera
+    configure_inspection_camera(scene,p)
     set_mask_mode(scene,p.mask_view)
     bpy.context.view_layer.update()
 
@@ -351,7 +366,7 @@ def set_mask_mode(scene,enabled):
     bpy.data.objects[PREFIX+'Pipe'].data.materials[0]=bpy.data.materials[PREFIX+('Mask' if enabled else 'Brass')]
     bpy.data.objects[PREFIX+'Floor'].data.materials[0]=bpy.data.materials[PREFIX+('Black' if enabled else 'Floor')]
     for obj in bpy.data.collections[PREFIX+'Studio'].objects:
-        if obj.name.startswith(('PS_EnvMachine_','PS_EnvGods_')) and hasattr(obj.data,'materials'):
+        if obj.name.startswith(('PS_EnvMachine_','PS_EnvGods_','PS_Capture_')) and hasattr(obj.data,'materials'):
             originals=obj.get('pipe_beauty_materials',[])
             for index,name in enumerate(originals):
                 obj.data.materials[index]=bpy.data.materials[PREFIX+'Black'] if enabled else bpy.data.materials[name]
@@ -428,6 +443,14 @@ class PIPE_OT_condition(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def on_inspection_camera(self,context):
+    if not SUSPENDED and context is not None and self.inspection_camera!='ORIGINAL':
+        from domain_profiles import camera_settings
+        apply_settings(context.scene,camera_settings(self.inspection_camera,seed=self.seed,variation=0,session=self.capture_session))
+    elif not SUSPENDED and context is not None:
+        on_appearance(self,context)
+
+
 def visible_angle(scene):
     if scene.pipe_studio.product_mode=='FLASHLIGHT':
         return (90+scene.pipe_studio.flashlight_roll)%360
@@ -462,9 +485,8 @@ def export_frame(scene,folder,stem):
                 array=np.empty(len(noisy.pixels),dtype=np.float32)
                 noisy.pixels.foreach_get(array)
                 array=array.reshape(-1,4)
-                rng=np.random.default_rng(p.seed)
-                sigma=p.sensor_noise*np.sqrt(np.maximum(array[:,:3],0)+.01)
-                array[:,:3]=np.clip(array[:,:3]+rng.normal(0,1,array[:,:3].shape)*sigma,0,1)
+                from sensor_response import apply_sensor_noise
+                apply_sensor_noise(array,p)
                 noisy.pixels.foreach_set(array.ravel())
                 noisy.filepath_raw=str(image_path); noisy.file_format='PNG'; noisy.save()
             finally:
@@ -670,7 +692,10 @@ class PIPE_Settings(bpy.types.PropertyGroup):
     defect_style: EnumProperty(name='Defect shape',items=[('DEFAULT','Single','Single localized depression or crease'),
         ('ELONGATED','Elongated','Long trough or crease'),('DOUBLE','Overlapping pair','Two interacting deformations'),
         ('OBLIQUE','Oblique','Tilted asymmetric lip'),('WRINKLED','Wrinkled','Nested deformations'),
-        ('BRANCHED','Converging','Converging crease cluster')],default='DEFAULT',update=on_geometry)
+        ('BRANCHED','Converging','Converging crease cluster'),
+        ('AXIAL_PINCH','Axial pinch','Short tapered shoulder crease with an asymmetric lip'),
+        ('SHALLOW_SWEEP','Shallow sweep','Broad shallow depression with rounded ends'),
+        ('SOFT_BUCKLE','Soft buckle','Rounded neck or shoulder fold with an unequal lip')],default='DEFAULT',update=on_geometry)
     defect_rotation: FloatProperty(name='Defect tilt (deg)',default=0,min=-75,max=75,update=on_geometry)
     secondary_strength: FloatProperty(name='Secondary lobe',default=.5,min=0,max=1,update=on_geometry)
     position: FloatProperty(name='Along pipe',description='Fraction along the pipe, from inlet to outlet',
@@ -695,11 +720,22 @@ class PIPE_Settings(bpy.types.PropertyGroup):
     light_softness: FloatProperty(name='Light width',default=1.5,min=.15,max=5,update=on_appearance)
     color_cast: FloatProperty(name='Light tint',default=0,min=-1,max=1,update=on_appearance)
     sensor_noise: FloatProperty(name='Camera noise',default=0,min=0,max=.025,precision=4,update=on_appearance)
+    inspection_camera: EnumProperty(name='GodsLight camera',items=[('ORIGINAL','Original',''),
+        ('CAM2534','2534 / bright left-facing',''),('CAM5080','5080 / bright right-facing',''),
+        ('CAM7650','7650 / dark low view','')],default='ORIGINAL',update=on_inspection_camera)
+    capture_session: EnumProperty(name='Capture conditions',items=[('AUG19','August 19','Original reference framing and plant lighting'),
+        ('AUG20','August 20','Lower bright-camera framing and green rear illumination')],default='AUG19',update=on_inspection_camera)
+    optical_blur: FloatProperty(name='Optical softness scale',default=1,min=0,max=2,update=on_appearance)
+    camera_softness: FloatProperty(name='Extra camera softness (px)',description='Additional subtle lens blur at the reference image size; combined with existing optics; zero disables; labels stay sharp',default=0,min=0,max=1,precision=2,update=on_appearance)
+    highlight_scatter: FloatProperty(name='Highlight scatter scale',default=1,min=0,max=2,update=on_appearance)
     environment: EnumProperty(name='Environment',items=[('STUDIO','Studio','Seamless studio'),
         ('MACHINE','Upright machine','Close inspection scene from supplied screenshot'),
         ('GODSLIGHT','GodsLight horizontal','Horizontal mounted pipe against blurred green machinery'),
         ('TRACK','Flashlight track','Overhead tightly packed row'),('TRACK_GRAZING','Track with grazing inspection','Low side light reveals surface damage'),('BUTTON_TRACK','Brass button track','Exterior reference with three cameras and region labels')],default='STUDIO',update=on_appearance)
     camera_zoom: FloatProperty(name='Framing zoom',default=1,min=.6,max=2.5,update=on_appearance)
+    capture_view: EnumProperty(name='Upright camera',items=[('ORIGINAL','Original rig',''),
+        ('UPRIGHT','Upright clear',''),('FOREGROUND','Upright foreground',''),
+        ('INVERTED','Inverted','')],default='ORIGINAL',update=on_appearance)
     camera_shift_x: FloatProperty(name='Horizontal framing',default=0,min=-.5,max=.5,update=on_appearance)
     camera_shift_y: FloatProperty(name='Vertical framing',default=0,min=-.5,max=.5,update=on_appearance)
     frame_aspect: FloatProperty(name='Frame width / height',default=1.6,min=.8,max=2,update=on_appearance)
@@ -965,6 +1001,8 @@ class PIPE_PT_main(bpy.types.Panel):
         box.operator('pipe.environment',text='Studio').preset='STUDIO'
         box.label(text='Scene: '+p.environment)
         box.prop(p,'lighting_profile',text='Lighting')
+        box.prop(p,'inspection_camera')
+        if p.environment=='GODSLIGHT' and p.inspection_camera!='ORIGINAL':box.prop(p,'capture_session')
         box.operator('pipe.reference',icon='IMAGE_DATA')
         if context.scene.get('pipe_error'):
             box=layout.box(); box.alert=True; box.label(text=context.scene['pipe_error'],icon='ERROR')
@@ -1045,7 +1083,7 @@ class PIPE_PT_camera(bpy.types.Panel):
         l=self.layout; row=l.row(align=True)
         for name,label in [('SIDE','Side'),('OBLIQUE','Oblique'),('REVERSE','Reverse')]:
             row.operator('pipe.view',text=label).preset=name
-        for key in ('camera_yaw','camera_elevation','camera_zoom','camera_shift_x','camera_shift_y','frame_aspect','focus_blur'):
+        for key in ('camera_yaw','camera_elevation','camera_zoom','camera_shift_x','camera_shift_y','frame_aspect','focus_blur','camera_softness'):
             l.prop(context.scene.pipe_studio,key,slider=True)
         l.label(text='Views are adjustable, not calibrated.')
 

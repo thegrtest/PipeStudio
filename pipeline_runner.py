@@ -14,7 +14,8 @@ import pipe_studio as studio
 from generation_plan import validate_plan,plan_digest
 
 CODE_FILES=('geometry.py','app_model.py','pipe_studio.py','scene_presets.py','lighting_profiles.py',
-            'brass_material.py','brass_finishes.py','inspection_scene.py','camera_response.py','generation_plan.py','pipeline_runner.py','mixed_dataset.py')
+            'brass_material.py','brass_finishes.py','brass_realism.py','brass_spectrum.py','brass_microdetail.py','reference_brass_spectrum.json',
+            'inspection_scene.py','camera_response.py','generation_plan.py','pipeline_runner.py','mixed_dataset.py')
 
 def file_hash(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()

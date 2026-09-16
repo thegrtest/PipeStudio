@@ -387,4 +387,6 @@ def update_brass(material, settings):
     for name,scale in (('Oxide islands',(.75,3.2,3.2)),('Fine oxide flecks',(48,65,65)),
         ('Long drawn waviness',(.50,5,5)),('Burnished draw tracks',(.35,28,28)),('Interrupted polished tracks',(2.5,4,4))):
         nodes[name+'Scale'].inputs[1].default_value=tuple(c/material_scale for c in scale)
+    from brass_realism import configure_drawn_finish
+    configure_drawn_finish(material,settings)
 

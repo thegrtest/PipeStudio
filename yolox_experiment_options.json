@@ -1,0 +1,31 @@
+{
+  "status": "Candidate for a subsequent controlled experiment; not applied to current training",
+  "class_names": ["Fold", "Dent", "Soap stain", "Oil / acid stain"],
+  "augmentation_ablation": {
+    "enable_mosaic": false,
+    "mosaic_prob": 0.0,
+    "mosaic_scale": [0.8, 1.2],
+    "enable_mixup": false,
+    "mixup_prob": 0.0,
+    "degrees": 2.0,
+    "translate": 0.03,
+    "shear": 0.0,
+    "flip_prob": 0.0,
+    "hsv_prob": 0.2,
+    "multiscale_range": 0,
+    "no_aug_epochs": 15
+  },
+  "resolution_ablation_after_data_and_augmentation": {
+    "input_size": [960, 960],
+    "test_size": [960, 960],
+    "multiscale_range": 0
+  },
+  "instructions": [
+    "Copy only the selected ablation fields into the existing YOLOX Exp class; retain model size, optimizer and dataset loader.",
+    "Keep input_size/test_size at the first model's values while testing the generator data or augmentation alone.",
+    "Confirm the actual training implementation uses these upstream YOLOX options before applying them.",
+    "Keep empty-label negatives in the loader. Review augmented batches for tiny defect survival.",
+    "Use no_aug_epochs=15 only when the total run is longer than 15 epochs.",
+    "Do not change the running model or dataset. These values are hypotheses to compare on fixed real development images."
+  ]
+}

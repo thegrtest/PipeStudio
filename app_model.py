@@ -12,7 +12,9 @@ DEFAULTS={**asdict(PipeSpec()),'roughness':.34,'texture_strength':.12,'key_power
           'camera_shift_x':0.0,'camera_shift_y':0.0,'frame_aspect':1.6,
           'ambient_strength':.30,'brass_green':0.0,'rim_power':455.0,'tone_mapping':'AGX',
           'lighting_profile':'REFERENCE','light_azimuth':0.0,'key_span':1.0,'finish_marks':0.0,
-          'oxide_amount':.38,'polish_amount':.42,**PRODUCT_DEFAULTS}
+          'oxide_amount':.38,'polish_amount':.42,**PRODUCT_DEFAULTS,
+          'capture_view':'ORIGINAL','inspection_camera':'ORIGINAL','capture_session':'AUG19',
+          'optical_blur':1.0,'highlight_scatter':1.0,'camera_softness':0.0}
 
 LIMITS={'length':(2,12),'radius':(.3,1.5),'end_ratio':(.35,1),'wall_ratio':(.03,.22),
         'taper_start':(0,.90),'taper_end':(.1,1),'position':(.03,.97),'angle':(0,360),
@@ -25,7 +27,8 @@ LIMITS={'length':(2,12),'radius':(.3,1.5),'end_ratio':(.35,1),'wall_ratio':(.03,
         'camera_zoom':(.6,2.5),'camera_shift_x':(-.5,.5),'camera_shift_y':(-.5,.5),
         'frame_aspect':(.8,2),'ambient_strength':(0,2),'brass_green':(0,1),'rim_power':(0,2500),
         'defect_rotation':(-75,75),'secondary_strength':(0,1),'light_azimuth':(-80,80),
-        'key_span':(.25,2),'finish_marks':(0,1),'oxide_amount':(0,1),'polish_amount':(0,1),**PRODUCT_LIMITS}
+        'key_span':(.25,2),'finish_marks':(0,1),'oxide_amount':(0,1),'polish_amount':(0,1),**PRODUCT_LIMITS,
+        'optical_blur':(0,2),'highlight_scatter':(0,2),'camera_softness':(0,1)}
 
 PRESETS={
  'Soft studio': {'roughness':.34,'texture_strength':.12,'wear':.18,'key_power':650,
@@ -61,6 +64,12 @@ def validate_settings(values):
         merged[key]=int(value) if key in ('seed','resolution','samples','flashlight_count','flashlight_index') else round(value,6)
     if merged['background'] not in ('GREY','DARK','GREEN'):
         raise ValueError('Unknown backdrop.')
+    if merged['inspection_camera'] not in ('ORIGINAL','CAM2534','CAM5080','CAM7650'):
+        raise ValueError('Unknown inspection camera.')
+    if merged['capture_session'] not in ('AUG19','AUG20'):
+        raise ValueError('Unknown capture session.')
+    if merged['capture_view'] not in ('ORIGINAL','UPRIGHT','FOREGROUND','INVERTED'):
+        raise ValueError('Unknown capture view.')
     if merged['environment'] not in ENVIRONMENTS[mode]:
         raise ValueError('Unknown environment.')
     if merged['tone_mapping'] not in ('AGX','STANDARD'):

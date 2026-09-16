@@ -4,9 +4,12 @@ import math
 import random
 
 
-DEFECT_STYLES = ("DEFAULT", "ELONGATED", "DOUBLE", "OBLIQUE", "WRINKLED", "BRANCHED")
-FOLD_STYLES = ("DEFAULT", "ELONGATED", "DOUBLE", "OBLIQUE", "WRINKLED", "BRANCHED")
-FOLD_STYLE_WEIGHTS = (0.18, 0.20, 0.16, 0.14, 0.16, 0.16)
+DENT_STYLES = ("DEFAULT", "ELONGATED", "DOUBLE", "OBLIQUE", "WRINKLED", "BRANCHED")
+FOLD_STYLES = DENT_STYLES + ("AXIAL_PINCH",)
+DEFECT_STYLES = FOLD_STYLES + ("SHALLOW_SWEEP", "SOFT_BUCKLE")
+# Real shoulder/neck folds are usually short axial pinches. Retain every older
+# family, including diagonal and branching folds, as a substantial minority.
+FOLD_STYLE_WEIGHTS = (0.072, 0.080, 0.064, 0.056, 0.064, 0.064, 0.600)
 
 
 def _weighted_choice(rng, values, weights):
@@ -22,6 +25,10 @@ def _weighted_choice(rng, values, weights):
 def _sample_fold_rotation(rng, defect_style):
     """Return a fold rotation with stronger angular and shape diversity."""
     roll = rng.random()
+    if defect_style == "AXIAL_PINCH":
+        # This profile is axial at zero rotation; legacy fold profiles are
+        # circumferential at zero. Do not rotate a pinch through another 90°.
+        return rng.uniform(-14, 14) if roll < 0.85 else rng.choice((-1, 1)) * rng.uniform(14, 28)
     if roll < 0.20:
         angle = rng.uniform(36, 74)
     elif roll < 0.40:
@@ -153,7 +160,60 @@ def _style_form(u, v, spec, phase):
     strength = spec.secondary_strength
     if spec.defect_style == "DEFAULT":
         return base(u, v)
-    if spec.defect_style == "ELONGATED":
+    if spec.defect_style == "AXIAL_PINCH":
+        # An axial depression with a rounded, pinched trough and an unequal
+        # displaced lip. In the references the highlight widens on one side
+        # of a short dark crease; a symmetric triangular groove misses this.
+        # All terms deform the skin and participate in its geometric mask.
+        side = 1.0 if math.sin(phase + 0.4) >= 0 else -1.0
+        longitudinal = u * (1.0 if math.cos(phase) >= 0 else -1.0)
+        longitudinal += 0.10 * math.sin(phase)
+        center = spec.irregularity * 0.10 * math.sin(1.8 * longitudinal + phase)
+        center += strength * 0.045 * math.sin(phase) * math.tanh(1.8 * longitudinal)
+        transverse = side * (v - center)
+        # Smoothly changing aperture gives narrow slits at low strength and
+        # broader pinched pockets at high strength, with rounded tapered ends.
+        aperture = (0.15 + 0.16 * strength) * (0.86 + 0.20 * math.tanh(-1.6 * longitudinal))
+        envelope = math.exp(-1.6 * longitudinal**2 - 0.18 * longitudinal**4)
+        core = -math.exp(-0.5 * (transverse / aperture)**2)
+        lip_width = 0.15 + 0.06 * strength
+        lip_center = aperture * 1.65 + 0.06
+        lip = (0.30 + 0.12 * strength) * math.exp(-0.5 * ((transverse - lip_center) / lip_width)**2)
+        lip *= 0.80 + 0.20 * math.tanh(-1.3 * longitudinal)
+        far_lip = 0.065 * math.exp(-0.5 * ((transverse + aperture * 1.75) / 0.19)**2)
+        pocket = -0.24 * strength * math.exp(-2.1 * (longitudinal + 0.28)**2 - 3.2 * (transverse + 0.08)**2)
+        form = envelope * (core + lip + far_lip) + pocket
+        # Compact C1 support prevents imperceptible tails joining a rim or
+        # covering a much larger label than the localized physical defect.
+        form *= smoothstep((2.10 - abs(u)) / 0.55) * smoothstep((1.60 - abs(v)) / 0.45)
+        if spec.defect == "DENT":
+            # A manually selected pinch remains a smooth pocket; dent
+            # randomization continues to use only its original six families.
+            form = 0.72 * form - 0.22 * math.exp(-2.0 * (u*u + v*v))
+    elif spec.defect_style == "SHALLOW_SWEEP":
+        # A wide, shallow press with rounded ends and no circular crater rim.
+        # Compact C1 support labels the complete deformed area, including the
+        # gently sloped center which can disappear under a grazing highlight.
+        x = (u + .16 * spec.irregularity * v * math.sin(phase)) / 1.65
+        y = (v + .13 * spec.irregularity * math.sin(1.7*u + phase)) / .95
+        bowl = max(0., 1-x*x)**2 * max(0., 1-y*y)**2
+        form = -bowl * (.86 + .14 * math.tanh(-x + .4*math.sin(phase)))
+        side = 1 if math.cos(phase) >= 0 else -1
+        # Small displaced shoulder on one side, never a complete raised ring.
+        form += (.025 + .035*strength) * math.exp(-5*(x+.22)**2-28*(y-.75*side)**2)
+        form *= smoothstep((2.0-abs(u))/.35) * smoothstep((1.3-abs(v))/.30)
+    elif spec.defect_style == "SOFT_BUCKLE":
+        # Rounded shoulder/neck collapse seen at the silhouette: a soft trough
+        # beside an unequal lip, without a triangular or razor-like apex.
+        side = 1 if math.sin(phase) >= 0 else -1
+        longitudinal = u + .10*math.sin(phase)
+        transverse = side*v + .10*spec.irregularity*math.sin(2*u+phase)
+        envelope = math.exp(-1.6*longitudinal**2-.25*longitudinal**4)
+        core = -math.exp(-((transverse+.06)/(.43+.09*strength))**2)
+        lip = (.20+.12*strength)*math.exp(-((transverse-.62)/.32)**2)
+        form = envelope*(core+lip)
+        form *= smoothstep((2.-abs(u))/.45)*smoothstep((1.65-abs(v))/.4)
+    elif spec.defect_style == "ELONGATED":
         if spec.defect == "DENT":
             form = base(u / 1.65 + strength * 0.16 * math.tanh(1.8*v), v / 0.72)
         else:
@@ -245,6 +305,9 @@ def sampling_grid(spec, axial=144, radial=128, adaptive=False):
         'OBLIQUE': (1.10, 2.50, .70, 1.50),
         'WRINKLED': (1.90, 1.95, .60, .85),
         'BRANCHED': (2.00, 2.10, .50, .80),
+        'AXIAL_PINCH': (2.10, 1.60, 1.00, .28),
+        'SHALLOW_SWEEP': (2.00, 1.30, 1.20, .80),
+        'SOFT_BUCKLE': (2.00, 1.65, 1.00, .43),
     }[spec.defect_style]
     half_x = co * sx * extent_u + si * sy * extent_v
     half_y = si * sx * extent_u + co * sy * extent_v
@@ -254,6 +317,12 @@ def sampling_grid(spec, axial=144, radial=128, adaptive=False):
     # for six samples per narrow physical sigma (more across the full trough).
     sigma_u = sx * narrow_u * (.15 if spec.defect == 'FOLD' else .42)
     sigma_v = sy * narrow_v * .42
+    if spec.defect_style == 'AXIAL_PINCH':
+        # The narrow feature is circumferential here, not axial. Resolve the
+        # smallest aperture and lip, even when the pinch is nearly horizontal.
+        sigma_u, sigma_v = sx * .40, sy * .09
+    elif spec.defect_style == 'SOFT_BUCKLE':
+        sigma_u, sigma_v = sx * .40, sy * .20
     step_x = 1 / (6 * math.hypot(co/sigma_u, si/sigma_v))
     step_y = 1 / (6 * math.hypot(si/sigma_u, co/sigma_v))
     step_t, step_angle = step_x/spec.length, step_y/local_radius
@@ -327,7 +396,7 @@ def random_spec(base, seed, visible_angle=None):
                   irregularity=rng.uniform(0.1, 0.5))
     # Append draws so existing seed-to-position/depth/width mappings stay stable.
     # The observed folds now cover a wider angular spread and a broader shape mix.
-    values["defect_style"] = rng.choice(DEFECT_STYLES) if values["defect"] == "DENT" else _weighted_choice(rng, FOLD_STYLES, FOLD_STYLE_WEIGHTS)
+    values["defect_style"] = rng.choice(DENT_STYLES) if values["defect"] == "DENT" else _weighted_choice(rng, FOLD_STYLES, FOLD_STYLE_WEIGHTS)
     if values["defect"] == "FOLD":
         values["defect_rotation"] = _sample_fold_rotation(rng, values["defect_style"])
     else:
