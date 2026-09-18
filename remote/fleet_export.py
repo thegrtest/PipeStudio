@@ -56,6 +56,7 @@ def inventory(root, job_filter=None):
                 files[kind]=dict(relative=rel,sha256=expected,bytes=source_path(root,rel).stat().st_size)
             rows.append(dict(sample_id=sid,job=job,files=files,primary_kind=row['primary_kind'],
                              width=row['width'],height=row['height'],instances=len(row['instances']),
+                             class_ids=sorted({int(i['class_id']) for i in row['instances']}),
                              setup=row['setup']))
     return dict(captured_at=datetime.now(timezone.utc).isoformat(),classes=classes,jobs=jobs,samples=rows)
 

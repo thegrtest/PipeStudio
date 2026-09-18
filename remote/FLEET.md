@@ -1,5 +1,44 @@
 # Three-device generation
 
+## Assembled brass/copper inspection track
+
+The assembly scene has a separate launcher so its defect and part-tracking
+classes cannot be mixed with the older tapered-pipe dataset. To generate the
+latest camera-matched assembly finish on the two remote GPUs while leaving the
+desktop idle:
+
+```powershell
+.\.venv\Scripts\python.exe remote/assembly_fleet.py launch --nodes spark,agx --count 5000
+.\.venv\Scripts\python.exe remote/assembly_fleet.py status
+.\.venv\Scripts\python.exe remote/assembly_fleet.py stop
+.\.venv\Scripts\python.exe remote/assembly_fleet.py resume
+.\.venv\Scripts\python.exe remote/assembly_fleet.py fetch
+```
+
+Count is per selected device. New runs use independent specimen ranges, native
+1920 × 1200 images and 96 samples. The dent/fold plan retains nominal 45% dents,
+45% folds and 10% good controls (partial final blocks can differ slightly).
+Lighting is selected independently of condition: approximately 70% Balanced,
+15% Current and 15% Four Lines, with the existing small exposure, light-balance,
+surface-finish, softness and sensor-noise variations. Each specimen keeps its
+finish and light preset through its three rolling views.
+
+The existing node lock, immutable source deployment and dashboard are reused.
+Assembly rendering runs in bounded chunks, verifies committed outputs, retries
+up to three attempts without progress, checks free disk space and pauses between
+images. Completed jobs receive mask/box and split validation. Outputs remain in
+each node's job folder under `all/images`, `all/labels` and separate
+`tracking/all/images`, `tracking/all/labels`; fetch retrieves these per-device
+folders with transfer hash checks. The ordinary domain collector deliberately
+does not merge assembly outputs into its different class mapping.
+
+The saved assembly run is recorded in `.cache/assembly-fleet-active.json`.
+Use `--run` to operate on a particular saved assembly job. Devices must be idle
+before launch; earlier jobs remain independently resumable. The desktop is not
+selected unless explicitly included in `--nodes`.
+
+## Older tapered-pipe inspection environments
+
 The default is the **new camera-matched tapered pipes**. One saved global plan is
 partitioned into unique specimens across the desktop, DGX Spark and AGX. Each run
 ships a checksummed copy of the renderer code and assets. Editing the workspace
@@ -162,6 +201,27 @@ saved snapshot, so launcher updates travel with the environment automatically.
 Each node has an exclusive generation lock, bounded render retries, source and
 output hash verification, and a 3 GB free-space guard. Render or validation
 failures are surfaced in status and logs, with GPU fallback to CPU disabled.
+
+## Temporary defect-class exclusions
+
+`fleet_nodes.local.json` can set `defaults.allowed_defects` to `["FOLD", "DENT"]`.
+Fleet preparation, smoke checks, launch, and rolling environment updates respect
+this selection for both primary and secondary defects. Remove this setting or
+list all four kinds to restore soap/oil generation. Class IDs remain unchanged.
+`--allowed-defects FOLD DENT` overrides the configured selection for one command.
+
+`remote/restrict_fleet_defects.py --request <saved-pause-request.json> --allowed FOLD DENT`
+continues an existing plan using the same renderer and quality settings, preserving
+every committed row and restarting only devices marked running in the request.
+The request records the parent run and initial device states before pausing.
+
+`remote/split_surface_dataset.py --source <collection> --soap <desktop-folder> --stain <desktop-folder>`
+copies whole image/label pairs into separate archives and verifies hashes, PNGs,
+and labels before removing those pairs from the original collection. Mixed images
+retain all annotations; soap+oil images appear in both archives. Keep shared
+images in the same training split when combining these datasets. The source
+receipt excludes classes 2 and 3 from later incremental fleet collections. A
+resumable journal preserves the original receipt and archive provenance.
 
 ## RGB render caching
 

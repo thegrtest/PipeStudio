@@ -1,0 +1,17 @@
+{
+  "purpose": "Empty machine backgrounds; no real product pixels",
+  "frames": [
+    {
+      "file": "20260904_051234_623_cam3936.jpg",
+      "source": "C:\\Users\\daugh\\Downloads\\CheckWeighShell\\CheckWeighShell\\images\\20260904_051234_623_cam3936.jpg",
+      "sha256": "74c22b2a7d028de8207a08df0f6106e8170c501ceef829a6fcc707fc54e05c23",
+      "review": "Inspected full 1920x1200 frame: no assemblies or hands visible. Missing label alone was not used as evidence."
+    },
+    {
+      "file": "20260904_051234_931_cam3936.jpg",
+      "source": "C:\\Users\\daugh\\Downloads\\CheckWeighShell\\CheckWeighShell\\images\\20260904_051234_931_cam3936.jpg",
+      "sha256": "d7967c3017ca005007950e59e279079edb9c92949219cfa1e688a3646abfe328",
+      "review": "Inspected full 1920x1200 frame: no assemblies or hands visible. Missing label alone was not used as evidence."
+    }
+  ]
+}

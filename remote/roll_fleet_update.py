@@ -43,7 +43,8 @@ def merged_plan(old,latest,completed):
     if set(lookup)!={r['sample_id'] for r in old['samples']}: raise ValueError('New profile changed specimen identities')
     plan=deepcopy(latest)
     plan['samples']=deepcopy(old['samples'][:completed])+[deepcopy(lookup[r['sample_id']]) for r in old['samples'][completed:]]
-    plan['generation_policy']=dict(defects_only=True,preserved_sample_ids=[r['sample_id'] for r in old['samples'][:completed]])
+    plan['generation_policy']={**latest.get('generation_policy',{}),'defects_only':True,
+                               'preserved_sample_ids':[r['sample_id'] for r in old['samples'][:completed]]}
     recount(plan)
     return validate_domain_plan(plan)
 
@@ -56,13 +57,15 @@ def recount(plan):
 
 
 def rollout(parent,paused):
-    from domain_plan import make_plan,defects_only_plan,validate_domain_plan
+    from domain_plan import make_plan,defects_only_plan,validate_domain_plan,restrict_defect_kinds
     settings=read_json(parent/'fleet.json'); nodes=settings['nodes']
     saved=snapshot(); release=saved[0]
     old_plans={n:read_json(parent/(n+'.plan.json')) for n in nodes}
     # Use the latest production profile, with the same independent seed ranges.
     latest={n:defects_only_plan(make_plan(len(p['samples']),min(r['settings']['seed'] for r in p['samples']),
                                       quality=p['quality'],profile='yolox')) for n,p in old_plans.items()}
+    allowed=read_json(ROOT/'fleet_nodes.local.json',{}).get('defaults',{}).get('allowed_defects')
+    if allowed: latest={n:restrict_defect_kinds(p,allowed) for n,p in latest.items()}
     if snapshot()[0]!=release: raise RuntimeError('Project changed while planning; retry the update')
     stages=parallel(nodes,lambda name,node:staged_update(node,saved))
     print(json.dumps(dict(staged=stages)),flush=True)
@@ -103,7 +106,7 @@ def rollout(parent,paused):
     for name,shard in shards.items():
         preserved.extend(shard['generation_policy']['preserved_sample_ids'])
         for index,row in zip(settings['assignments'][name],shard['samples']): plan['samples'][index]=row
-    plan['generation_policy']=dict(defects_only=True,preserved_sample_ids=preserved)
+    plan['generation_policy']={**plan.get('generation_policy',{}),'defects_only':True,'preserved_sample_ids':preserved}
     recount(plan); validate_domain_plan(plan)
     write_json(folder/'render_plan.json',plan)
     write_json(folder/'fleet.json',{**settings,'job':job,'release':release,'archive':str(saved[1]),'archive_sha256':saved[2],

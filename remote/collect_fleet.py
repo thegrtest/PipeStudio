@@ -18,6 +18,7 @@ from PIL import Image
 
 from fleet import ROOT, run, parallel
 from fleet_common import digest_file,read_json,write_json
+from fleet_node import lock
 
 
 def command(node):
@@ -85,6 +86,15 @@ def copy_node(name,node,files,destination):
 
 
 def collect(config, output, job=None):
+    output=output.resolve()
+    output.parent.mkdir(parents=True,exist_ok=True)
+    with lock(output.parent/('.'+output.name+'.collection.lock')):
+        pending=read_json(output/'.collection/surface-split.json',{})
+        if pending and pending.get('phase')!='complete': raise RuntimeError('Finish the pending dataset split before collecting')
+        return _collect(config,output,job)
+
+
+def _collect(config, output, job=None):
     nodes=read_json(config)['nodes']; output=output.resolve()
     snapshots=parallel(nodes,lambda name,node:inventory(node,job))
     if any('error' in result for result in snapshots.values()): raise RuntimeError(json.dumps(snapshots))
@@ -95,13 +105,16 @@ def collect(config, output, job=None):
         raise ValueError('Destination contains unrelated files; refusing to mix or overwrite them')
     output.mkdir(parents=True,exist_ok=True); (output/'.collection').mkdir(exist_ok=True)
     existing=read_json(output/'.collection/receipt.json',{})
+    excluded=set(existing.get('excluded_class_ids',[]))
     if existing and existing['classes']!=classes: raise ValueError('Existing collection has different class names')
     pairs={}; names={}; image_labels={}
     for row in existing.get('samples',[]):
+        if excluded.intersection(row.get('class_ids',[])): raise ValueError('Existing collection still contains excluded classes')
         key=(row['files']['image']['sha256'],row['files']['label']['sha256'])
         pairs[key]=row; names[row['name']]=key
     for name,snapshot in snapshots.items():
         for sample in snapshot['samples']:
+            if excluded.intersection(sample['class_ids']): continue
             key=(sample['files']['image']['sha256'],sample['files']['label']['sha256'])
             if key[0] in image_labels and image_labels[key[0]]!=key[1]:
                 raise ValueError('Identical images have conflicting labels')
@@ -124,7 +137,8 @@ def collect(config, output, job=None):
             if target.exists():
                 if digest_file(target)!=info['sha256']: raise ValueError('Existing collection file differs: '+relative)
             else: transfers[sample['node']][info['relative']]={**info,'target':relative}
-    receipt=dict(classes=classes,samples=list(pairs.values()),job_filter=job,captured_at=datetime.now(timezone.utc).isoformat(),
+    receipt=dict(classes=classes,samples=list(pairs.values()),job_filter=job,excluded_class_ids=sorted(excluded),
+                 archived_datasets=existing.get('archived_datasets',{}),captured_at=datetime.now(timezone.utc).isoformat(),
                  snapshots={name:{k:s[k] for k in ('captured_at','jobs')} for name,s in snapshots.items()})
     write_json(output/'.collection/receipt.json',receipt)
     print(json.dumps(dict(snapshot_images={n:len(s['samples']) for n,s in snapshots.items()},unique_pairs=len(pairs),
@@ -146,9 +160,10 @@ def collect(config, output, job=None):
     expected={row['name'] for row in pairs.values()}
     if {p.stem for p in (output/'images').glob('*.png')}!=expected or {p.stem for p in (output/'labels').glob('*.txt')}!=expected:
         raise ValueError('Image and label sets differ')
-    (output/'classes.txt').write_text('\n'.join(classes[str(i)] for i in range(len(classes)))+'\n',encoding='utf-8')
+    active_classes={k:v for k,v in classes.items() if int(k) not in excluded}
+    (output/'classes.txt').write_text('\n'.join(active_classes.values())+'\n',encoding='utf-8')
     (output/'data.yaml').write_text('path: '+json.dumps(output.as_posix())+'\ntrain: images\nnames:\n'+
-        ''.join(f'  {k}: {json.dumps(v)}\n' for k,v in classes.items()),encoding='utf-8')
+        ''.join(f'  {k}: {json.dumps(v)}\n' for k,v in active_classes.items()),encoding='utf-8')
     result=dict(valid=True,images=len(pairs),labels=len(pairs),job_filter=job,bytes=total_bytes,primary_counts=dict(counts),
                 completed_at=datetime.now(timezone.utc).isoformat(),output=str(output),transfer=results)
     write_json(output/'collection.json',result)

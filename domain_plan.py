@@ -425,6 +425,45 @@ def defects_only_plan(plan, preserved=0):
     result['expected_primary_counts']=dict(Counter(r['primary_kind'] for r in rows))
     result['expected_instance_counts']=dict(Counter(a['kind'] for r in rows for a in r['instances']))
     result['expected_setup_counts']=dict(Counter(r['setup'] for r in rows))
+    validate_domain_plan(result)
+    allowed=plan.get('generation_policy',{}).get('allowed_defects')
+    return restrict_defect_kinds(result,allowed,preserved) if allowed else result
+
+
+def restrict_defect_kinds(plan, allowed, preserved=0):
+    """Change future defect classes without changing committed rows or capture settings."""
+    allowed=tuple(dict.fromkeys(allowed))
+    if not allowed or any(kind not in KINDS for kind in allowed):
+        raise ValueError('Allowed defects must be a nonempty subset of supported kinds')
+    if isinstance(preserved,bool) or not isinstance(preserved,int) or not 0<=preserved<=len(plan['samples']):
+        raise ValueError('Invalid committed prefix length')
+    result=deepcopy(plan); rows=result['samples']
+    # Balance replacements against the future rows which can remain unchanged.
+    counts=Counter(r['primary_kind'] for r in rows[preserved:]
+                   if all(i['kind'] in allowed for i in r['instances']))
+    for row in rows[preserved:]:
+        if all(i['kind'] in allowed for i in row['instances']): continue
+        rng=_rng(row['settings']['seed'],'allowed-defects:'+','.join(allowed))
+        kind=min(allowed,key=lambda k:counts[k]); counts[kind]+=1
+        size=row['size_bin'] if row['size_bin'] in ('small','medium','large') else 'medium'
+        profile=row.get('sampling_profile','reference') if row.get('generation_revision') else 'reference'
+        settings=validate_settings({**row['settings'],'defect':'NONE'})
+        instances=[_instance(settings,kind,size,0,profile=profile)]
+        if kind in ('FOLD','DENT'): settings=validate_settings({**settings,**instances[0]['spec']})
+        if len(row['instances'])>1 and len(allowed)>1:
+            secondary=rng.choice([k for k in allowed if k!=kind])
+            instances.append(_instance(settings,secondary,row['instances'][1]['size_bin'],1,
+                                       occupied=[_location(instances[0])],profile=profile))
+        row.update(primary_kind=kind,scenario_id=row['setup'].lower()+'_'+kind.lower(),
+                   severity=size,size_bin=size,settings=settings,instances=instances,
+                   source_feature_ids=[f"inspection_camera_{row['setup'].lower()}"]+
+                       [f for instance in instances for f in instance['source_feature_ids']])
+    result['generation_policy']={**result.get('generation_policy',{}),'allowed_defects':list(allowed),
+                                'preserved_sample_ids':[r['sample_id'] for r in rows[:preserved]]}
+    result['ratio_definition']='Future defect classes restricted to '+', '.join(allowed)+'; committed specimens preserved.'
+    result['expected_primary_counts']=dict(Counter(r['primary_kind'] for r in rows))
+    result['expected_instance_counts']=dict(Counter(i['kind'] for r in rows for i in r['instances']))
+    result['expected_setup_counts']=dict(Counter(r['setup'] for r in rows))
     return validate_domain_plan(result)
 
 
@@ -440,14 +479,18 @@ def validate_domain_plan(plan):
                                                (actual_setups,'expected_setup_counts'))):
         raise ValueError('Recorded allocation differs from the planned specimens.')
     policy=plan.get('generation_policy',{})
-    if policy.get('defects_only'):
+    if policy.get('defects_only') or policy.get('allowed_defects'):
         preserved=policy.get('preserved_sample_ids',[])
         ids={r['sample_id'] for r in rows}
         preserved_ids=set(preserved)
         if len(preserved)!=len(preserved_ids) or not preserved_ids.issubset(ids):
             raise ValueError('Preserved specimens must name unique rows in this plan')
-        if any(r['primary_kind']=='NONE' or not r['instances'] for r in rows if r['sample_id'] not in preserved_ids):
+        if policy.get('defects_only') and any(r['primary_kind']=='NONE' or not r['instances'] for r in rows if r['sample_id'] not in preserved_ids):
             raise ValueError('Defects-only generation cannot include future good specimens')
+        allowed=policy.get('allowed_defects',KINDS)
+        if not allowed or any(k not in KINDS for k in allowed): raise ValueError('Invalid allowed defect classes')
+        if any(i['kind'] not in allowed for r in rows if r['sample_id'] not in preserved_ids for i in r['instances']):
+            raise ValueError('Future specimen contains an excluded defect class')
     elif not plan.get('preview'):
         expected={kind:len(rows)*9//40 for kind in KINDS}
         expected['NONE']=len(rows)//10

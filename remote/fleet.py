@@ -85,6 +85,10 @@ def snapshot():
     paths += list((ROOT/'remote').glob('blender_*.sh'))
     paths += list((ROOT/'flashlight_lab').glob('*.py'))+list((ROOT/'flashlight_lab/assets').glob('*.png'))
     paths += [p for p in (ROOT/'references').glob('*') if p.suffix.lower() in ('.png','.jpg','.jpeg')]
+    if (ROOT/'assembly_generate.py').is_file():
+        from assembly_camera_match import PLATES
+        paths += [ROOT/'assets/assembly_cam3936'/name for name in PLATES]
+        paths += [ROOT/'assets/assembly_cam3936/provenance.json',ROOT/'verification/verify_assembly_track.py']
     contents = {p.relative_to(ROOT).as_posix():p.read_bytes() for p in sorted(set(paths))}
     if any(digest_file(ROOT/name)!=hashlib.sha256(data).hexdigest() for name,data in contents.items()):
         raise RuntimeError('Renderer files changed during packaging; retry when the edit is saved')
@@ -104,10 +108,12 @@ def snapshot():
 
 
 def planned_work(args, nodes):
-    from domain_plan import make_plan, validate_domain_plan, defects_only_plan
+    from domain_plan import make_plan, validate_domain_plan, defects_only_plan, restrict_defect_kinds
     def make(seed):
         plan=make_plan(args.count,seed,args.quality,args.smoke,profile=getattr(args,'profile','reference'))
-        return defects_only_plan(plan) if getattr(args,'defects_only',False) and not args.smoke else plan
+        if getattr(args,'defects_only',False) and not args.smoke: plan=defects_only_plan(plan)
+        allowed=getattr(args,'allowed_defects',None)
+        return restrict_defect_kinds(plan,allowed) if allowed else plan
     plan = make(args.seed)
     if getattr(args,'per_node',False) and not args.smoke:
         if args.seed+args.count*len(nodes)>2000000000:
@@ -127,6 +133,7 @@ def planned_work(args, nodes):
         selected=[]
         kinds=('NONE','FOLD','DENT','SOAP_STAIN','OIL_STAIN') if getattr(args,'verification',False) else ('NONE','FOLD','DENT')
         if getattr(args,'defects_only',False): kinds=tuple(k for k in kinds if k!='NONE')
+        if getattr(args,'allowed_defects',None): kinds=tuple(k for k in kinds if k=='NONE' or k in args.allowed_defects)
         for kind in kinds:
             for offset in range(len(nodes)):
                 selected.append([r for r in plan['samples'] if r['primary_kind']==kind][offset])
@@ -209,6 +216,9 @@ def deploy(folder, settings):
         update=sync_one(node,(settings['release'],Path(settings['archive']),settings['archive_sha256']))
         config=runtime_config(node)
         config['release']=settings['release']
+        if settings.get('pipeline')=='assembly':
+            config['pipeline']='assembly'
+            config['plan_sha256']=digest_json(read_json(folder/(name+'.plan.json')))
         prepared=node_call(node,dict(action='prepare',job=settings['job'],plan=read_json(folder/(name+'.plan.json')),config=config))
         return {**prepared,'update':update}
     results=parallel(settings['nodes'],one)
@@ -219,6 +229,8 @@ def deploy(folder, settings):
 
 
 def fetch(folder, settings):
+    if settings.get('pipeline')=='assembly':
+        raise ValueError('Assembly labels have a separate schema. Use remote/assembly_fleet.py fetch --run '+str(folder))
     def one(name,node):
         package=node_call(node,dict(action='pack',job=settings['job']))
         cache=folder/'transfers'; cache.mkdir(exist_ok=True)
@@ -288,9 +300,9 @@ def failed_results(results):
     return any('error' in value for value in results.values())
 
 
-def continue_defects(folder, settings):
+def continue_defects(folder, settings, allowed=None):
     """Resume with a new saved plan, carrying all verified committed outputs."""
-    from domain_plan import defects_only_plan, validate_domain_plan
+    from domain_plan import defects_only_plan, validate_domain_plan, restrict_defect_kinds
     nodes=settings['nodes']
     stopped=parallel(nodes,lambda name,node:node_call(node,dict(action='stop',job=settings['job'])))
     if failed_results(stopped): raise RuntimeError('Could not pause every node: '+json.dumps(stopped))
@@ -308,9 +320,11 @@ def continue_defects(folder, settings):
     plan=deepcopy(plan); preserved=[]
     for name in nodes:
         shard=defects_only_plan(read_json(folder/(name+'.plan.json')),states[name]['completed'])
+        if allowed: shard=restrict_defect_kinds(shard,allowed,states[name]['completed'])
         preserved.extend(shard['generation_policy']['preserved_sample_ids'])
         for index,row in zip(settings['assignments'][name],shard['samples']): plan['samples'][index]=row
     plan['generation_policy']=dict(defects_only=True,preserved_sample_ids=preserved)
+    if allowed: plan['generation_policy']['allowed_defects']=list(allowed)
     plan['ratio_definition']='Remaining specimens all contain labeled defects; completed specimens are preserved.'
     plan['expected_primary_counts']=dict(Counter(r['primary_kind'] for r in plan['samples']))
     plan['expected_instance_counts']=dict(Counter(a['kind'] for r in plan['samples'] for a in r['instances']))
@@ -349,7 +363,9 @@ def ready(args, nodes):
         state.get('readiness',{}).get('release')==release and
         state.get('readiness',{}).get('runtime_signature')==digest_json(runtime_config(nodes[name])) and
         state.get('readiness',{}).get('quality')==args.quality and
-        state.get('readiness',{}).get('images',0)>=(4 if args.defects_only else 5) and
+        state.get('readiness',{}).get('images',0)>=len(getattr(args,'allowed_defects',None) or ('FOLD','DENT','SOAP_STAIN','OIL_STAIN'))+(0 if args.defects_only else 1) and
+        set(getattr(args,'allowed_defects',None) or ('FOLD','DENT','SOAP_STAIN','OIL_STAIN')).issubset(
+            state.get('readiness',{}).get('allowed_defects',('FOLD','DENT','SOAP_STAIN','OIL_STAIN'))) and
         (args.defects_only or not state.get('readiness',{}).get('defects_only'))
         for name,state in states.items())
     previous_ready=read_json(ROOT/'.cache/fleet-ready.json',{})
@@ -382,7 +398,8 @@ def ready(args, nodes):
         dataset=fetch(test_folder,settings)
         if 'folder' not in dataset: raise RuntimeError('Test collection failed: '+json.dumps(dataset))
         certificates=parallel(nodes,lambda name,node:node_call(node,dict(action='mark_ready',job=settings['job'],
-            release=release,runtime_signature=digest_json(runtime_config(node)),quality=args.quality,defects_only=args.defects_only)))
+            release=release,runtime_signature=digest_json(runtime_config(node)),quality=args.quality,defects_only=args.defects_only,
+            allowed_defects=getattr(args,'allowed_defects',None))))
         if failed_results(certificates): raise RuntimeError('Readiness certification failed: '+json.dumps(certificates))
     if snapshot()[0]!=release:
         raise RuntimeError('The environment changed during verification. Run Ready again to test the new version')
@@ -408,6 +425,8 @@ def main():
     parser.add_argument('--count',type=int,default=3200)
     parser.add_argument('--per-node',action='store_true',help='Generate Count images on EACH selected device with separate seed ranges')
     parser.add_argument('--defects-only',action=argparse.BooleanOptionalAction,default=None,help='Exclude good specimens from future production plans')
+    parser.add_argument('--allowed-defects',nargs='+',choices=('FOLD','DENT','SOAP_STAIN','OIL_STAIN'),
+                        help='Defect classes to generate; defaults to fleet configuration')
     parser.add_argument('--seed',type=int,default=None)
     parser.add_argument('--quality',choices=('quick','full'),default='full')
     parser.add_argument('--profile',choices=('reference','yolox'),default='yolox')
@@ -418,12 +437,13 @@ def main():
     configured=read_json(args.config)
     if not configured: raise RuntimeError('Configure fleet_nodes.local.json first; see remote/FLEET.md')
     if args.defects_only is None: args.defects_only=configured.get('defaults',{}).get('defects_only',False)
+    if args.allowed_defects is None: args.allowed_defects=configured.get('defaults',{}).get('allowed_defects')
     nodes={safe_name(name):configured['nodes'][name] for name in args.nodes.split(',')}
     if args.action=='defects-only':
         from fleet_node import lock
         with lock(ROOT/'.cache/fleet-controller.lock'):
             folder=args.run or Path(read_json(ROOT/'.cache/fleet-active.json')['folder'])
-            result=continue_defects(folder,read_json(folder/'fleet.json'))
+            result=continue_defects(folder,read_json(folder/'fleet.json'),args.allowed_defects)
             configured.setdefault('defaults',{})['defects_only']=True
             write_json(args.config,configured)
             print(json.dumps(result,indent=2))

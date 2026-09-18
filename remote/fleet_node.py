@@ -82,6 +82,9 @@ def work(root, job):
     request = read_json(folder/'fleet_job.json')
     release = root/'releases'/safe_name(request['release'])
     sys.path.insert(0, str(release))
+    if request.get('pipeline')=='assembly':
+        from assembly_fleet_runtime import supervise
+        return supervise(root,job,lock)
     from generate_domain_dataset import check_committed
     plan = read_json(folder/'render_plan.json')
     manifest_path = folder/'all/manifest.json'
@@ -243,12 +246,15 @@ def action(root, request):
         if digest_json({key:value for key,value in config.items() if key!='release'}) != request['runtime_signature']:
             raise ValueError('Readiness runtime settings differ from the test')
         plan=read_json(folder/'render_plan.json')
-        required={'FOLD','DENT','SOAP_STAIN','OIL_STAIN'}
+        required=set(request.get('allowed_defects') or ('FOLD','DENT','SOAP_STAIN','OIL_STAIN'))
+        if not required.issubset({'FOLD','DENT','SOAP_STAIN','OIL_STAIN'}): raise ValueError('Invalid readiness classes')
+        allowed=sorted(required)
         if not request.get('defects_only'): required.add('NONE')
         if plan['quality']!=request['quality'] or not required.issubset({s['primary_kind'] for s in plan['samples']}):
             raise ValueError('Readiness test must cover every required specimen class')
         certificate = dict(release=request['release'],runtime_signature=request['runtime_signature'],
-                           job=job,images=state['completed'],quality=request['quality'],checked_at=time.time(),defects_only=request.get('defects_only',False))
+                           job=job,images=state['completed'],quality=request['quality'],checked_at=time.time(),
+                           defects_only=request.get('defects_only',False),allowed_defects=allowed)
         write_json(root/'readiness.json',certificate)
         return certificate
     if action == 'stop':
@@ -265,6 +271,9 @@ def action(root, request):
         folder.mkdir(parents=True)
         write_json(folder/'render_plan.json', request['plan'])
         write_json(folder/'fleet_job.json', request['config'])
+        if request['config'].get('pipeline')=='assembly':
+            write_json(folder/'fleet_status.json',dict(state='prepared',completed=0,total=len(request['plan']['rows']),pipeline='assembly'))
+            return dict(prepared=job)
         all_dir=folder/'all'; all_dir.mkdir()
         classes=request['plan']['classes']
         (all_dir/'classes.txt').write_text('\n'.join(classes.values())+'\n')
@@ -276,6 +285,7 @@ def action(root, request):
             if busy(root): raise RuntimeError('This node is already generating')
             if not (folder/'fleet_job.json').exists(): raise ValueError('Prepare the job before starting')
             (folder/'cancel.flag').unlink(missing_ok=True)
+            if read_json(folder/'fleet_job.json').get('pipeline')=='assembly':(folder/'STOP').unlink(missing_ok=True)
             write_json(root/'active.json', dict(job=job))
             with (folder/'supervisor.log').open('a') as log:
                 child = subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--root',str(root),'--work',job],

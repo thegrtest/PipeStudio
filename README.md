@@ -1,5 +1,18 @@
 # Pipe Studio
 
+For the inert assembled brass/copper product on the rolling guide, open
+**Open Assembly Track Studio.cmd**. This separate environment renders native
+1920 × 1200 images with four reflection bars and exports independent defect
+and shell/ferrule tracking datasets. Choose the preserved original scene or
+the elevated camera look with verified empty-track photo backgrounds and rendered
+parts, with current, four crisp lines, and balanced lighting. Fully procedural
+original/refined looks remain selectable. Native real/old/new comparisons are in
+`verification/assembly_topdown_v4_matched/index.html`. The v5 brass finish pass
+compares the same small camera patch piece by piece in
+`verification/assembly_surface_v5_final/index.html`, with corrected reflection
+bands, warmer shaded brass and seeded fine grain.
+See [assembly track](ASSEMBLY_TRACK.md).
+
 For tapered brass datasets matched to the inspection cameras, see
 [camera-matched generation](DOMAIN_REALISM.md). **Open Camera Matched Pipe
 Studio.cmd** opens the Blender controls; **Generate Camera Matched Dataset.cmd**
