@@ -18,14 +18,31 @@ class AssemblyPlanTests(unittest.TestCase):
     def test_small_shallow_dent_distribution(self):
         recipes=[make_specimen(seed,'dent',allowed_defects=('dent',)) for seed in range(1000,2000)]
         families=Counter(r['instances'][0]['dent_family'] for r in recipes)
-        self.assertTrue(600<families['small_circular']<700,families)
-        self.assertTrue(150<families['shallow_circular']<250,families)
-        self.assertTrue(100<families['large_varied']<200,families)
+        self.assertTrue(350<families['small_circular']<450,families)
+        self.assertTrue(170<families['shallow_circular']<270,families)
+        self.assertTrue(210<families['shallow_band']<310,families)
+        self.assertTrue(80<families['large_varied']<170,families)
         for r in recipes:
-            d=r['instances'][0].get('round_dent')
+            item=r['instances'][0];d=item.get('round_dent')
             if d:
                 self.assertLess(d['depth'],.031)
-                self.assertTrue(.92<=d['aspect']<=1.10)
+                if item['dent_family']=='shallow_band':
+                    self.assertTrue(.48<=d['aspect']<=.78)
+                    self.assertLessEqual(abs(d['rotation']),.28)
+                elif item['dent_family']=='small_circular':
+                    self.assertTrue(.92<=d['aspect']<=1.10)
+                else:
+                    self.assertTrue(.85<=d['aspect']<=1.15)
+
+    def test_soft_fold_distribution_covers_low_contrast_buckles(self):
+        recipes=[make_specimen(seed,'deformity',allowed_defects=('deformity',)) for seed in range(2000,3000)]
+        styles=Counter(r['instances'][0]['spec']['defect_style'] for r in recipes)
+        self.assertTrue(500<styles['SOFT_BUCKLE']<610,styles)
+        self.assertTrue(250<styles['AXIAL_PINCH']<360,styles)
+        self.assertTrue(110<styles['WRINKLED']<200,styles)
+        soft=[r['instances'][0]['spec'] for r in recipes if r['instances'][0]['spec']['defect_style']=='SOFT_BUCKLE']
+        self.assertTrue(all(.035<=s['depth']<=.09 for s in soft))
+        self.assertTrue(all(-25<=s['defect_rotation']<=25 for s in soft))
 
     def test_round_dent_is_smooth_bowl_with_matching_support(self):
         from assembly_dents import round_dent_field

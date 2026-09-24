@@ -180,3 +180,12 @@ def configure_reference_microfinish(material, settings):
     configure_spectral_grain(material,settings)
     from brass_microdetail import configure_local_details
     configure_local_details(material,settings)
+    if value('environment','STUDIO')=='MACHINE' and value('capture_view','ORIGINAL') in ('INVERTED','UPRIGHT','FOREGROUND'):
+        # September cam1489/1130/2829 have mottled, short draw traces rather than the
+        # nearly full-height light/dark lanes in the first synthetic review.
+        # Keep the shared local handling marks and grain; quiet only the
+        # broad axial alloy field, independently of class or visibility QA.
+        nodes['Domain axial alloy coordinates'].inputs[1].default_value=(2.2/scale,14/scale,14/scale)
+        nodes['Domain drawn alloy reflectance'].inputs[0].default_value=.14+wear*.16
+        nodes['Inspection mottled alloy'].inputs[0].default_value=.13+oxide*.08
+        material['domain_material_version']=str(material['domain_material_version'])+'-capture-short-traces-2'

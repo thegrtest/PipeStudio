@@ -9,7 +9,7 @@ import random
 
 from geometry import PipeSpec
 
-VERSION = 'assembly-track-v5'
+VERSION = 'assembly-track-v6'
 DEFECT_CLASSES = ('dent', 'ding', 'scratch', 'deformity')
 PART_CLASSES = ('shell', 'ferrule')
 CONDITIONS = ('good',) + DEFECT_CLASSES
@@ -66,8 +66,24 @@ def make_specimen(seed, condition=None, look='CAMERA_MATCHED', lighting='BALANCE
             spec.update(depth=rng.uniform(.06, .15), width=rng.uniform(.012, .025),
                         arc=rng.uniform(8, 14), defect_style=rng.choice(('DEFAULT', 'DOUBLE')))
         elif kind == 'deformity':
-            spec.update(defect='FOLD', depth=rng.uniform(.09, .23), width=rng.uniform(.055, .12),
-                        arc=rng.uniform(24, 50), defect_style=rng.choice(('SOFT_BUCKLE', 'AXIAL_PINCH', 'WRINKLED')))
+            # Earlier batches overrepresented deep, sharp creases. Real misses
+            # often present as rounded low-contrast depressions that are
+            # visually close to dents, so make those the majority while
+            # retaining a smaller severe/wrinkled tail.
+            fold_draw=rng.random()
+            if fold_draw < .55:
+                spec.update(defect='FOLD', depth=rng.uniform(.035, .09), width=rng.uniform(.07, .14),
+                            arc=rng.uniform(18, 42), defect_style='SOFT_BUCKLE',
+                            irregularity=rng.uniform(.08,.28), defect_rotation=rng.uniform(-25,25),
+                            secondary_strength=rng.uniform(.08,.55))
+            elif fold_draw < .85:
+                spec.update(defect='FOLD', depth=rng.uniform(.06, .14), width=rng.uniform(.055, .11),
+                            arc=rng.uniform(16, 36), defect_style='AXIAL_PINCH',
+                            irregularity=rng.uniform(.10,.35), defect_rotation=rng.uniform(-18,18),
+                            secondary_strength=rng.uniform(.15,.65))
+            else:
+                spec.update(defect='FOLD', depth=rng.uniform(.09, .18), width=rng.uniform(.07, .12),
+                            arc=rng.uniform(25, 48), defect_style='WRINKLED')
         else:
             # Proxy is used only to refine the sampling grid. Actual scratch
             # is an independent thin, tapered groove with a matching support.

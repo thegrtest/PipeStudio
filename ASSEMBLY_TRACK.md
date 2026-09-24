@@ -60,10 +60,12 @@ Finish differences remain visible; do not treat whole-frame similarity from a
 reused background as evidence of model transfer. Evaluate on held-out real parts
 and another capture session before estimating production rejection performance.
 
-Version 3 gives newly planned refined specimens a small-dent emphasis: roughly
-65% of dent instances are small circular bowls, 20% broader shallow bowls, and
-15% the larger varied dent families. This changes dent shape/size, not the
-primary class balance. Folds and mixed defects remain available. Smooth
+Version 6 gives newly planned refined specimens a broader shallow-defect mix:
+roughly 40% of dent instances are small circular bowls, 22% broader shallow
+bowls, 26% shallow circumferential bands, and 12% larger varied dent families.
+It also makes most folds soft, low-depth buckles while retaining deeper axial
+pinches and wrinkles. This changes defect morphology, not the primary class
+balance. Folds and mixed defects remain available. Smooth
 compact displacement replaces raised crater rims on the circular families;
 diameter and depth vary independently. Local mesh refinement resolves these
 features and the same displacement field supplies each label mask. Circular
@@ -78,7 +80,7 @@ surface bump. The eight native labeled examples are in
 
 An already-running renderer keeps its saved plan and loaded code. The completed
 September 16 dent/fold batch retains its `renderer_snapshot` and **Resume Cycle.cmd**
-in its output folder. New cycles use version 5; the completed earlier previews
+in its output folder. New cycles use version 6; the completed earlier previews
 and datasets stay available.
 
 | Lighting preset | Appearance | CLI value |

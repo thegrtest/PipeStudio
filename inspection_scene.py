@@ -85,7 +85,61 @@ def _material(name, color, metallic=0.8, roughness=0.5, grain=0.12):
     bump.inputs['Distance'].default_value = 0.002
     links.new(noise.outputs['Fac'], bump.inputs['Height'])
     links.new(bump.outputs['Normal'], shader.inputs['Normal'])
+    _fixture_contact_finish(material, coords, shader, smudges, finish, bump, metallic)
     return material
+
+
+def _fixture_contact_finish(material, coords, shader, base_color, base_roughness, base_normal, metallic):
+    """Quiet, interrupted cleaning wear at a shared physical fixture scale.
+
+    Generated coordinates stretch grain over differently sized machine pieces.
+    These extra traces use local scene units and a per-object offset instead;
+    they follow the fixture, never the specimen, image pixels or defect class.
+    """
+    nodes = material.node_tree.nodes
+    link = material.node_tree.links.new
+    def node(kind, name):
+        result = nodes.new(kind); result.name = result.label = name
+        return result
+    identity = node('ShaderNodeObjectInfo', 'Fixture finish identity')
+    offset = node('ShaderNodeVectorMath', 'Fixture finish coordinates'); offset.operation = 'ADD'
+    link(coords.outputs['Object'], offset.inputs[0]); link(identity.outputs['Random'], offset.inputs[1])
+    stretch = node('ShaderNodeVectorMath', 'Fixture wipe direction'); stretch.operation = 'MULTIPLY'
+    stretch.inputs[1].default_value = (62., 49., 1.8)
+    link(offset.outputs[0], stretch.inputs[0])
+    trace = node('ShaderNodeTexNoise', 'Fixture finite wipe traces')
+    trace.inputs['Scale'].default_value = 1.; trace.inputs['Detail'].default_value = 1.5
+    link(stretch.outputs[0], trace.inputs['Vector'])
+    gate = node('ShaderNodeTexNoise', 'Fixture contact patches')
+    gate.inputs['Scale'].default_value = 1.7; gate.inputs['Detail'].default_value = 2.
+    link(offset.outputs[0], gate.inputs['Vector'])
+    masks = []
+    for name, source, low, high in (('Fixture sparse wipes', trace, .62, .77),
+                                   ('Fixture quiet areas', gate, .43, .67)):
+        mask = node('ShaderNodeMapRange', name); mask.clamp = True
+        mask.interpolation_type = 'SMOOTHSTEP'
+        mask.inputs['From Min'].default_value = low; mask.inputs['From Max'].default_value = high
+        link(source.outputs['Fac'], mask.inputs['Value']); masks.append(mask)
+    coverage = node('ShaderNodeMath', 'Fixture interrupted wear'); coverage.operation = 'MULTIPLY'
+    link(masks[0].outputs[0], coverage.inputs[0]); link(masks[1].outputs[0], coverage.inputs[1])
+    roughness = node('ShaderNodeMath', 'Fixture contact roughness'); roughness.operation = 'MULTIPLY_ADD'
+    roughness.inputs[1].default_value = -.10 if metallic > .5 else .06
+    link(coverage.outputs[0], roughness.inputs[0]); link(base_roughness.outputs[0], roughness.inputs[2])
+    link(roughness.outputs[0], shader.inputs['Roughness'])
+    multiplier = node('ShaderNodeMath', 'Fixture contact reflectance'); multiplier.operation = 'MULTIPLY_ADD'
+    multiplier.inputs[1].default_value = .12 if metallic > .5 else -.06
+    multiplier.inputs[2].default_value = 1.
+    link(coverage.outputs[0], multiplier.inputs[0])
+    mixed = node('ShaderNodeMixRGB', 'Fixture worn reflectance'); mixed.blend_type = 'MULTIPLY'
+    mixed.inputs[0].default_value = 1.
+    link(base_color.outputs[0], mixed.inputs[1]); link(multiplier.outputs[0], mixed.inputs[2])
+    link(mixed.outputs[0], shader.inputs['Base Color'])
+    normal = node('ShaderNodeBump', 'Fixture shallow contact traces')
+    normal.invert = True; normal.inputs['Strength'].default_value = .12
+    normal.inputs['Distance'].default_value = .0005
+    link(coverage.outputs[0], normal.inputs['Height']); link(base_normal.outputs['Normal'], normal.inputs['Normal'])
+    link(normal.outputs['Normal'], shader.inputs['Normal'])
+    material['fixture_finish_version'] = 'physical-contact-finish-1'
 
 
 def _mesh(collection, name, vertices, faces, material, smooth=False):
@@ -538,7 +592,7 @@ def configure_inspection_camera(scene, settings):
     if bounce:
         bounce.data.energy=value('fill_power',45)*.75
         bounce.data.size=7;bounce.data.size_y=6
-    scene['pipe_fixture_response_version']='machined-recess-3'
+    scene['pipe_fixture_response_version']='machined-recess-4-contact-finish'
     scene['pipe_inspection_light_version']='broad-diffuser-3'
     session=value('capture_session','AUG19')
     # The next acquisition session had a green reflected field behind 7650.

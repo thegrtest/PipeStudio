@@ -21,6 +21,29 @@ def fixture():
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_local_eval_gap_cli_prepares_training_and_preview_plans(self):
+        import json
+        import subprocess
+        import sys
+        repo=Path(__file__).resolve().parent
+        with fixture() as temp:
+            for preview,count in ((False,60),(True,18)):
+                output=temp/('preview' if preview else 'production')
+                command=[sys.executable,str(repo/'generate_domain_dataset.py'),
+                         '--output',str(output),'--profile','eval-gap','--count','60',
+                         '--seed','925010000' if preview else '925000000','--prepare-only']
+                if preview:command.append('--preview')
+                result=subprocess.run(command,capture_output=True,text=True,cwd=repo)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                plan=json.loads((output/'render_plan.json').read_text())
+                self.assertEqual(len(plan['samples']),count)
+                self.assertEqual({r['split'] for r in plan['samples']},{'test' if preview else 'train'})
+                self.assertEqual(set(plan['expected_primary_counts']),{'NONE','FOLD','DENT'})
+                self.assertTrue(all(r['sampling_profile']=='eval-gap' for r in plan['samples']))
+                self.assertTrue((output/'dataset_request.json').is_file())
+                self.assertTrue((output/'all/data.yaml').is_file())
+                self.assertFalse((output/'render.log').exists())
+
     def test_worker_lock_is_independent_and_exclusive(self):
         with fixture() as temp:
             root=Path(temp)

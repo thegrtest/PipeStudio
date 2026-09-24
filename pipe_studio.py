@@ -695,7 +695,10 @@ class PIPE_Settings(bpy.types.PropertyGroup):
         ('BRANCHED','Converging','Converging crease cluster'),
         ('AXIAL_PINCH','Axial pinch','Short tapered shoulder crease with an asymmetric lip'),
         ('SHALLOW_SWEEP','Shallow sweep','Broad shallow depression with rounded ends'),
-        ('SOFT_BUCKLE','Soft buckle','Rounded neck or shoulder fold with an unequal lip')],default='DEFAULT',update=on_geometry)
+        ('SOFT_BUCKLE','Soft buckle','Rounded neck or shoulder fold with an unequal lip'),
+        ('BODY_BUCKLE','Body buckle','Transverse rounded body crease with a short unequal lip'),
+        ('CRESCENT_CREASE','Crescent neck crease','Curved partial crease and raised edge at the neck/shoulder'),
+        ('ROLLED_LIP','Rolled mouth lip','Inward neck buckle with a locally lowered, uneven mouth rim')],default='DEFAULT',update=on_geometry)
     defect_rotation: FloatProperty(name='Defect tilt (deg)',default=0,min=-75,max=75,update=on_geometry)
     secondary_strength: FloatProperty(name='Secondary lobe',default=.5,min=0,max=1,update=on_geometry)
     position: FloatProperty(name='Along pipe',description='Fraction along the pipe, from inlet to outlet',

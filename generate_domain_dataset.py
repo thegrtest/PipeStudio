@@ -14,8 +14,9 @@ ROOT=Path(__file__).resolve().parent
 CODE_FILES=('domain_profiles.py','domain_plan.py','domain_geometry.py','domain_render.py',
     'generate_domain_dataset.py','geometry.py','pipe_studio.py','app_model.py','brass_material.py',
     'inspection_scene.py','camera_response.py','capture_scene.py','capture_plan.py','scene_presets.py','fast_pipeline.py',
-    'brass_realism.py','brass_spectrum.py','brass_microdetail.py','reference_brass_spectrum.json',
-    'sensor_response.py','environment_fields.py','reference_environment_fields.json','glare_guard.py','yolox_profile.py','eval_generation.py')
+    'brass_realism.py','brass_spectrum.py','brass_microdetail.py','body_gap_plan.py','reference_brass_spectrum.json',
+    'sensor_response.py','environment_fields.py','reference_environment_fields.json','glare_guard.py','yolox_profile.py','eval_generation.py',
+    'soap_residue.py','defect_visibility.py','capture_variation.py','neck_defect_plan.py','eval_gap_plan.py')
 
 
 def read_json(path,default=None):
@@ -83,7 +84,12 @@ def generate(args):
         if request['renderer_sources']!=source_signature(): raise ValueError('Renderer changed; choose a new output folder.')
     else:
         if root.exists() and any(root.iterdir()): raise ValueError('Choose a new empty output folder or --resume.')
-        plan=make_plan(total=args.count,seed=args.seed,quality=args.quality,preview=args.preview,profile=getattr(args,'profile','reference'))
+        if getattr(args,'profile','reference')=='eval-gap':
+            from eval_gap_plan import make_plan as make_eval_gap_plan, preview_plan
+            plan=(preview_plan(args.seed) if args.preview else
+                  make_eval_gap_plan(args.count,args.seed,args.quality))
+        else:
+            plan=make_plan(total=args.count,seed=args.seed,quality=args.quality,preview=args.preview,profile=getattr(args,'profile','reference'))
         root.mkdir(parents=True,exist_ok=True)
         atomic_json(root/'render_plan.json',plan)
         atomic_json(root/'dataset_request.json',{'images':len(plan['samples']),'renderer_sources':source_signature(),
@@ -158,7 +164,7 @@ if __name__=='__main__':
     parser.add_argument('--count',type=int,default=3200)
     parser.add_argument('--seed',type=int,default=20260914)
     parser.add_argument('--quality',choices=('quick','full'),default='full')
-    parser.add_argument('--profile',choices=('reference','yolox'),default='yolox')
+    parser.add_argument('--profile',choices=('reference','yolox','eval-gap'),default='yolox')
     parser.add_argument('--preview',action='store_true')
     parser.add_argument('--prepare-only',action='store_true')
     parser.add_argument('--resume',action='store_true')

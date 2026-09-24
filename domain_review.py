@@ -141,6 +141,12 @@ def validate_dataset(output, *, allow_incomplete=False):
             error("sample_id", f"empty or repeated sample ID {sid!r}", sid)
         sample_ids.add(sid)
         planned_row = planned_rows.get(sid, {})
+        if row.get('visibility_repair_history') or row.get('visibility_reposition_attempt'):
+            try:
+                from defect_visibility import replay_visibility_repairs
+                planned_row = replay_visibility_repairs(planned_row,row)
+            except (ValueError,KeyError,TypeError) as exc:
+                error('invalid_visibility_repairs',str(exc),sid)
         for field in ("setup", "primary_kind", "surface_condition", "split", "instances"):
             if field in planned_row and not _matches_expected(row.get(field), planned_row[field]):
                 error("plan_sample_mismatch", field, sid)

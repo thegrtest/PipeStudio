@@ -1,5 +1,8 @@
 # Three-device generation
 
+For the current three-camera `eval-gap` supplement, including generation on a
+single new machine, see [the targeted-generation quick start](../GENERATE_TARGETED.md).
+
 ## Assembled brass/copper inspection track
 
 The assembly scene has a separate launcher so its defect and part-tracking

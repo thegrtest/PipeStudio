@@ -55,6 +55,13 @@ def deposit(mesh,spot,index):
     v=np.arctan2(np.sin(da),np.cos(da))/math.radians(spot['angular_size'])
     turn=math.radians(spot.get('rotation',0))
     u,v=u*math.cos(turn)+v*math.sin(turn),-u*math.sin(turn)+v*math.cos(turn)
+    from soap_residue import SUBTYPES, coverage
+    if spot['kind']=='SOAP_STAIN' and spot['subtype'] in SUBTYPES:
+        alpha,support=coverage(u,v,spot)
+        alpha*=outer; support*=outer
+        attr=mesh.attributes.new('domain_stain_'+str(index),'FLOAT','POINT')
+        attr.data.foreach_set('value',alpha)
+        return support
     phase=(spot['seed']%997)*.217
     radius=np.hypot(u,v)
     irregularity=spot.get('irregularity',.3)
@@ -81,7 +88,6 @@ def stain_material(mat,instances):
     # Rebuild only owned deposit nodes; old links otherwise compound per frame.
     for n in list(nodes):
         if n.name.startswith('DomainStain_'): nodes.remove(n)
-    base=nodes['DullOxide']
     # Save the actual original final shader, which includes polish and rim blends.
     source_name=mat.get('domain_base_node')
     socket_name=mat.get('domain_base_socket')
@@ -91,21 +97,57 @@ def stain_material(mat,instances):
         socket=output.inputs['Surface'].links[0].from_socket
         mat['domain_base_node']=socket.node.name
         mat['domain_base_socket']=socket.name
+    # One coat shader for all deposits avoids overflowing Cycles' closure
+    # budget on the already layered brass material. Each instance retains
+    # its own attribute and mask; only the material evaluation is shared.
+    coat=None
+    opacity=None
+    parameters={}
+    def math_node(operation,a,b,name):
+        n=nodes.new('ShaderNodeMath');n.name='DomainStain_'+name;n.operation=operation
+        for value,target in ((a,n.inputs[0]),(b,n.inputs[1])):
+            if isinstance(value,(float,int)):target.default_value=value
+            else:link(value,target)
+        return n.outputs[0]
     for index,instance in enumerate(instances):
         if 'spot' not in instance: continue
         spot=instance['spot']
-        mix=nodes.new('ShaderNodeMixShader');mix.name='DomainStain_Mix_'+str(index)
         attr=nodes.new('ShaderNodeAttribute');attr.name='DomainStain_Attr_'+str(index)
         attr.attribute_name='domain_stain_'+str(index)
-        coat=nodes.new('ShaderNodeBsdfPrincipled');coat.name='DomainStain_Coat_'+str(index)
         soap=instance['kind']=='SOAP_STAIN'
         acid=spot['subtype']=='acid_burn'
-        coat.inputs['Base Color'].default_value=(.60,.63,.57,1) if soap else (.045,.026,.009,1) if acid else (.010,.008,.004,1)
-        coat.inputs['Roughness'].default_value=.78 if soap or acid else .25
-        coat.inputs['Metallic'].default_value=.18 if acid else 0
+        film=dict(color=(.60,.63,.57,1) if soap else (.045,.026,.009,1) if acid else (.010,.008,.004,1),
+                  roughness=.78 if soap or acid else .25,metallic=.18 if acid else 0,ior=1.5)
+        from soap_residue import SUBTYPES, sample_parameters
+        if soap and spot['subtype'] in SUBTYPES:
+            film=sample_parameters(spot['seed'],spot['subtype'])
+            film['ior']=1.42
+        values={'Base Color':film['color'],'Roughness':film['roughness'],'Metallic':film['metallic'],'IOR':film['ior']}
+        if coat is None:
+            coat=nodes.new('ShaderNodeBsdfPrincipled');coat.name='DomainStain_Coat'
+            opacity=attr.outputs['Fac']
+            for key,value in values.items():coat.inputs[key].default_value=value
+            parameters=dict(values)
+            continue
+        uncovered=math_node('SUBTRACT',1.,attr.outputs['Fac'],f'Uncovered_{index}')
+        previous=math_node('MULTIPLY',opacity,uncovered,f'Previous_{index}')
+        opacity=math_node('ADD',previous,attr.outputs['Fac'],f'Alpha_{index}')
+        weight=math_node('DIVIDE',attr.outputs['Fac'],opacity,f'Weight_{index}')
+        for key,value in values.items():
+            mix=nodes.new('ShaderNodeMixRGB');mix.name=f'DomainStain_{key}_{index}'
+            link(weight,mix.inputs[0])
+            old=parameters[key]
+            if isinstance(old,(float,int)):mix.inputs[1].default_value=(old,old,old,1)
+            elif isinstance(old,(tuple,list)):mix.inputs[1].default_value=old
+            else:link(old,mix.inputs[1])
+            mix.inputs[2].default_value=value if isinstance(value,(tuple,list)) else (value,value,value,1)
+            parameters[key]=mix.outputs[0]
+            link(mix.outputs[0],coat.inputs[key])
+    if coat is not None:
         brass=nodes['BrassShader']
         if brass.inputs['Normal'].is_linked: link(brass.inputs['Normal'].links[0].from_socket,coat.inputs['Normal'])
-        link(attr.outputs['Fac'],mix.inputs[0]);link(socket,mix.inputs[1]);link(coat.outputs[0],mix.inputs[2])
+        mix=nodes.new('ShaderNodeMixShader');mix.name='DomainStain_Mix'
+        link(opacity,mix.inputs[0]);link(socket,mix.inputs[1]);link(coat.outputs[0],mix.inputs[2])
         socket=mix.outputs[0]
     link(socket,output.inputs['Surface'])
 
@@ -212,7 +254,98 @@ def correct_glare(scene,path,folder,annotations,pipe_mask):
         scene.view_settings.exposure=exposure
 
 
+def verify_geometry_visibility(scene,row,folder,annotations,pipe_mask,path,spec,grid,glare):
+    """Remove one defect at a time; retain topology, finish, optics and lights."""
+    import bpy
+    import numpy as np
+    from domain_geometry import build_instances
+    from defect_visibility import assess,VERSION,VisibilityRejected
+    mesh=bpy.data.objects['PS_Pipe'].data
+    original=np.empty(len(mesh.vertices)*3,dtype=np.float32)
+    mesh.vertices.foreach_get('co',original)
+    beauty=read_display_raster(path)
+    masks=[read_display_raster(folder/a['mask'])[:,:,0]>.5 for a in annotations]
+    silhouette=read_display_raster(pipe_mask)[:,:,0]>.5
+    lights={name:float(bpy.data.objects[name].data.energy) for name in glare['actual_lights_watts']}
+    exposure=scene.view_settings.exposure
+    controls=folder/'controls';controls.mkdir(exist_ok=True)
+    results=[];kept=[]
+    try:
+        for name,watts in glare['actual_lights_watts'].items():bpy.data.objects[name].data.energy=watts
+        scene.view_settings.exposure=glare['actual_exposure']
+        for index,item in enumerate(row['instances']):
+            if item['kind'] not in ('DENT','FOLD'):continue
+            vertices,*_=build_instances(spec,row['instances'],**grid,omit_instance=index)
+            if len(vertices)!=len(mesh.vertices):raise ValueError('Counterfactual topology changed')
+            mesh.vertices.foreach_set('co',np.asarray(vertices,dtype=np.float32).ravel())
+            mesh.update();bpy.context.view_layer.update()
+            control=controls/f'{row["sample_id"]}_without_{index:02d}.png'
+            render_beauty(scene,control)
+            result=assess(beauty,read_display_raster(control),masks[index],silhouette,
+                          [m for j,m in enumerate(masks) if j!=index],row.get('visibility_controls'))
+            result.update(instance_index=index,instance_id=item.get('instance_id',index))
+            if row.get('keep_visibility_controls',False):
+                result['control_image']=control.relative_to(folder).as_posix();kept.append(result['control_image'])
+            else:control.unlink()
+            results.append(result)
+            print('VISIBILITY',row['sample_id'],index,result['passed'],result['p90_change_codes'],result['changed_fraction'],flush=True)
+    finally:
+        mesh.vertices.foreach_set('co',original);mesh.update()
+        for name,watts in lights.items():bpy.data.objects[name].data.energy=watts
+        scene.view_settings.exposure=exposure;scene.render.filepath=str(path)
+        bpy.context.view_layer.update()
+    report=dict(version=VERSION,sample_id=row['sample_id'],passed=all(r['passed'] for r in results),
+                method='Per-instance removal with identical grid, materials, render seed, final lights and camera response',
+                instances=results,control_files=kept,detector_accuracy_measured=False)
+    if not report['passed']:raise VisibilityRejected(report)
+    return report
+
+
 def render_sample(studio,scene,row,folder):
+    """Opt-in angle retries retain class counts and the unmodified visibility gate."""
+    from defect_visibility import VisibilityRejected
+    limit=row.get('visibility_reposition_limit',0)
+    if not isinstance(limit,int) or not 0<=limit<=3:raise ValueError('Invalid visibility reposition limit')
+    if limit and row.get('sampling_profile')!='eval-gap':raise ValueError('Reposition retries require the eval-gap recipe')
+    history=[]
+    for attempt in range(limit+1):
+        candidate=row
+        if attempt:
+            from eval_gap_plan import reposition
+            candidate=reposition(row,attempt)
+        candidate={**candidate,'visibility_reposition_history':history.copy()}
+        try:return _render_with_depth_repairs(studio,scene,candidate,folder)
+        except VisibilityRejected as exc:
+            history.append(dict(attempt=attempt,report=exc.report))
+            if attempt==limit:raise
+
+
+def _render_with_depth_repairs(studio,scene,row,folder):
+    """Only return/commit RGB-label pairs that pass bounded visibility QA."""
+    from copy import deepcopy
+    from defect_visibility import VisibilityRejected,repair_instances
+    candidate=deepcopy(row);attempts=[]
+    for attempt in range(3):
+        candidate['visibility_repair_history']=attempts.copy()
+        if candidate.get('settings') and candidate.get('instances') and 'spec' in candidate['instances'][0]:
+            candidate['settings'].update(candidate['instances'][0]['spec'])
+        try:return _render_candidate(studio,scene,candidate,folder)
+        except VisibilityRejected as exc:
+            attempts.append(dict(attempt=attempt,instances=deepcopy(candidate['instances']),report=exc.report))
+            rejected=folder/'rejected';rejected.mkdir(parents=True,exist_ok=True)
+            import shutil
+            rgb=folder/'images'/(row['sample_id']+'.png')
+            if rgb.exists():
+                shutil.copyfile(rgb,rejected/(row['sample_id']+f'_attempt_{attempt}.png'))
+            atomic_json(rejected/(row['sample_id']+'_visibility.json'),dict(sample_id=row['sample_id'],attempts=attempts))
+            if attempt==2:
+                if rgb.exists():rgb.unlink()
+                raise
+            failed=[r['instance_index'] for r in exc.report['instances'] if not r['passed']]
+            candidate=repair_instances(candidate,failed)
+
+
+def _render_candidate(studio,scene,row,folder):
     import bpy
     import numpy as np
     from domain_geometry import build_instances
@@ -222,8 +355,10 @@ def render_sample(studio,scene,row,folder):
     # Scene geometry is rebuilt once using the union of every local refinement grid.
     original=studio.build_mesh
     supports=[]
+    grid={}
     def build(*args,**kwargs):
-        vertices,faces,union,regions,masks=build_instances(spec,instances,axial=kwargs.get('axial',144),radial=kwargs.get('radial',128))
+        grid.update(axial=kwargs.get('axial',144),radial=kwargs.get('radial',128))
+        vertices,faces,union,regions,masks=build_instances(spec,instances,**grid)
         supports[:] = masks
         return vertices,faces,union,regions
     try:
@@ -235,6 +370,9 @@ def render_sample(studio,scene,row,folder):
     if row.get('fixture_parameters'):
         from eval_generation import apply_fixture_parameters
         fixture_state=apply_fixture_parameters(scene,row['fixture_parameters'])
+    from capture_variation import apply_variation
+    scene['capture_fixture_roughness_scale']=(row.get('fixture_parameters') or {}).get('roughness_scale',1.)
+    capture_state=apply_variation(scene,row.get('background_variation'))
     mesh=bpy.data.objects['PS_Pipe'].data
     mesh['pipe_length']=spec.length
     if len(supports)!=len(instances):
@@ -291,17 +429,21 @@ def render_sample(studio,scene,row,folder):
         scene.view_settings.view_transform,scene.view_settings.exposure,scene.cycles.samples,scene.cycles.use_denoising,scene.camera.data.dof.use_dof=state
         studio.set_mask_mode(scene,False)
     glare=correct_glare(scene,path,folder,annotations,pipe_mask)
+    visibility=verify_geometry_visibility(scene,row,folder,annotations,pipe_mask,path,spec,grid,glare)
     (folder/'labels'/(stem+'.txt')).write_text('\n'.join(lines)+('\n' if lines else ''),encoding='utf-8')
     info={k:v for k,v in row.items() if k not in ('settings','instances')}
     info.update(image='images/'+stem+'.png',width=scene.render.resolution_x,height=scene.render.resolution_y,
         projected_pipe_bbox_xywh=projected_pipe_bounds(scene),
         parameters=studio.settings_dict(p),instances=annotations,appearance_version=row.get('generation_revision','domain-2-glare-1'),
-        fixture_response=fixture_state,
+        fixture_response=fixture_state,capture_background_variation=capture_state,
         material_response_version=mat.get('domain_material_version','unknown'),
         material_detail_audit=json.loads(mat.get('detail_audit','null')),
+        fixture_finish_versions=sorted({str(material['fixture_finish_version'])
+            for obj in scene.objects if obj.type=='MESH' and not obj.hide_render
+            for material in obj.data.materials if material and material.get('fixture_finish_version')}),
         fixture_response_version=scene.get('pipe_fixture_response_version') if p.inspection_camera!='ORIGINAL' and p.environment=='GODSLIGHT' else None,
         inspection_light_version=scene.get('pipe_inspection_light_version') if p.inspection_camera!='ORIGINAL' and p.environment=='GODSLIGHT' else None,
-        glare_guard=glare,pipe_mask=pipe_mask.relative_to(folder).as_posix(),
+        glare_guard=glare,visibility_guard=visibility,pipe_mask=pipe_mask.relative_to(folder).as_posix(),
         renderer=bpy.app.version_string,render_device=scene.get('pipe_device'),
         camera_response_sigma_px=scene.get('pipe_camera_response_sigma_px'),
         camera_softness_px=scene.get('pipe_camera_softness_px'),
@@ -311,6 +453,7 @@ def render_sample(studio,scene,row,folder):
         calibrated=False)
     atomic_json(folder/'metadata'/(stem+'.json'),info)
     files=[info['image'],'labels/'+stem+'.txt','metadata/'+stem+'.json',info['pipe_mask']]+[a['mask'] for a in annotations]
+    files+=visibility['control_files']
     info['output_sha256']={rel:file_hash(folder/rel) for rel in files}
     return info
 

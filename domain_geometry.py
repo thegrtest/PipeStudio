@@ -1,7 +1,7 @@
 """One watertight pipe mesh carrying separately labeled defect instances."""
 import math
 
-from geometry import PipeSpec, displacement, radius_at, sampling_grid
+from geometry import PipeSpec, displacement, axial_displacement, radius_at, sampling_grid
 
 
 BODY_KEYS = ('length','radius','end_ratio','wall_ratio','taper_start','taper_end',
@@ -76,7 +76,7 @@ def instance_grid(base_spec, instances, axial=144, radial=128):
     return _merge(ts),_merge(angles),specs
 
 
-def build_instances(base_spec, instances, axial=144, radial=128):
+def build_instances(base_spec, instances, axial=144, radial=128, omit_instance=None):
     """Return vertices, faces, union mask, face regions, instance masks.
 
     Instance masks are aligned to the input list, including all-zero entries
@@ -88,6 +88,16 @@ def build_instances(base_spec, instances, axial=144, radial=128):
     """
     base=base_spec if isinstance(base_spec,PipeSpec) else PipeSpec(**base_spec)
     ts,angles,specs=instance_grid(base,instances,axial,radial)
+    rim_specs=[s for s in specs if s is not None and s.defect_style=='ROLLED_LIP']
+    if len(rim_specs)>1:
+        raise ValueError('At most one rolled rim instance is supported per pipe; other defect styles may be mixed.')
+    # Keep the FULL refinement grid when making a counterfactual. Removing an
+    # instance before sampling changes topology/normals and invalidates RGB QA.
+    if omit_instance is not None:
+        if not isinstance(omit_instance,int) or not 0<=omit_instance<len(instances):
+            raise ValueError('Counterfactual instance index is out of range')
+        specs[omit_instance]=None
+    rim=next((s for s in specs if s is not None and s.defect_style=='ROLLED_LIP'),None)
     vertices=[]
     masks=[]
     individual=[[] for _ in instances]
@@ -97,7 +107,8 @@ def build_instances(base_spec, instances, axial=144, radial=128):
             values=[displacement(t,theta,spec) if spec is not None else (0.0,0.0) for spec in specs]
             delta=_bounded_sum(sum(value[0] for value in values),nominal)
             r=nominal+delta
-            vertices.append(((t-.5)*base.length,r*math.cos(theta),r*math.sin(theta)))
+            axial_offset=axial_displacement(t,theta,rim) if rim is not None else 0.
+            vertices.append(((t-.5)*base.length+axial_offset,r*math.cos(theta),r*math.sin(theta)))
             masks.append(float(any(value[1] for value in values)))
             for target,value in zip(individual,values):
                 target.append(value[1])

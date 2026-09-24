@@ -110,6 +110,15 @@ def snapshot():
 def planned_work(args, nodes):
     from domain_plan import make_plan, validate_domain_plan, defects_only_plan, restrict_defect_kinds
     def make(seed):
+        if getattr(args,'profile',None)=='eval-gap':
+            from eval_gap_plan import make_plan as eval_plan,preview_plan
+            return preview_plan((seed+args.count+10000)%1900000000) if args.smoke else eval_plan(args.count,seed,args.quality)
+        if getattr(args,'profile',None)=='body-gap':
+            from body_gap_plan import make_plan as gap_plan
+            allowed=getattr(args,'allowed_defects',None)
+            if allowed and set(allowed)!={'FOLD','DENT'}:
+                raise ValueError('The body-gap profile requires both FOLD and DENT')
+            return gap_plan(args.count,seed,args.quality,args.smoke)
         plan=make_plan(args.count,seed,args.quality,args.smoke,profile=getattr(args,'profile','reference'))
         if getattr(args,'defects_only',False) and not args.smoke: plan=defects_only_plan(plan)
         allowed=getattr(args,'allowed_defects',None)
@@ -129,11 +138,12 @@ def planned_work(args, nodes):
         plan['expected_setup_counts']=dict(Counter(r['setup'] for r in rows))
         validate_domain_plan(plan)
         return plan,assignment
-    if args.smoke:
+    if args.smoke and getattr(args,'profile',None)!='eval-gap':
         selected=[]
         kinds=('NONE','FOLD','DENT','SOAP_STAIN','OIL_STAIN') if getattr(args,'verification',False) else ('NONE','FOLD','DENT')
         if getattr(args,'defects_only',False): kinds=tuple(k for k in kinds if k!='NONE')
         if getattr(args,'allowed_defects',None): kinds=tuple(k for k in kinds if k=='NONE' or k in args.allowed_defects)
+        if getattr(args,'profile',None)=='body-gap': kinds=('FOLD','DENT')
         for kind in kinds:
             for offset in range(len(nodes)):
                 selected.append([r for r in plan['samples'] if r['primary_kind']==kind][offset])
@@ -282,6 +292,7 @@ def fetch(folder, settings):
     with tarfile.open(source_archive) as package:
         review_names=['domain_review.py','release.json']
         if 'glare_guard.py' in package.getnames(): review_names.append('glare_guard.py')
+        if 'defect_visibility.py' in package.getnames(): review_names.append('defect_visibility.py')
         for name in review_names:
             member = package.getmember(name)
             if not member.isfile(): raise ValueError('Invalid review source')
@@ -429,7 +440,7 @@ def main():
                         help='Defect classes to generate; defaults to fleet configuration')
     parser.add_argument('--seed',type=int,default=None)
     parser.add_argument('--quality',choices=('quick','full'),default='full')
-    parser.add_argument('--profile',choices=('reference','yolox'),default='yolox')
+    parser.add_argument('--profile',choices=('reference','yolox','body-gap','eval-gap'),default='yolox')
     parser.add_argument('--smoke',action='store_true')
     parser.add_argument('--force',action='store_true',help='Repeat readiness renders even when this version was tested')
     args=parser.parse_args()

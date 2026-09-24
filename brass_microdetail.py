@@ -7,12 +7,13 @@ import json
 import math
 import numpy as np
 
-VERSION = 'inspection-local-detail-5'
+VERSION = 'inspection-forming-detail-6'
 WIDTH, HEIGHT = 1536, 1024
 
 
 def synthesize_details(seed, width=WIDTH, height=HEIGHT, length=8., radius=.9,
-                       wear=.35, finish_marks=.3):
+                       wear=.35, finish_marks=.3, taper_start=.8, taper_end=.88,
+                       end_ratio=.68):
     """Return bounded RGBA data and a small audit of the sampled finish.
 
     Sparse marks cluster around randomly sampled contact areas. Quiet areas
@@ -22,6 +23,8 @@ def synthesize_details(seed, width=WIDTH, height=HEIGHT, length=8., radius=.9,
     """
     if width < 32 or height < 32 or length <= 0 or radius <= 0:
         raise ValueError('Positive physical dimensions and at least 32 texels are required.')
+    if not 0 <= taper_start < taper_end <= 1 or not 0 < end_ratio <= 1:
+        raise ValueError('Invalid tapered surface proportions.')
     wear = float(np.clip(wear, 0, 1))
     marks = float(np.clip(finish_marks, 0, 1))
     rng = np.random.default_rng([int(seed), 915051])
@@ -93,6 +96,61 @@ def synthesize_details(seed, width=WIDTH, height=HEIGHT, length=8., radius=.9,
         stamp(x, rng.uniform(0, circumference), rng.uniform(.012, .035)*radius,
               rng.uniform(.06, .30)*radius, 0, (.06, -.12, .02))
 
+    # Forming history is distinct from handling damage. Development crops show
+    # interrupted axial tracks, then finer circumferential rubs on the neck.
+    # Sample them in physical surface coordinates so a camera rotation does not
+    # rotate the finish relative to the part. Separate RNG preserves handling
+    # identity when proportions change; defect class never enters this field.
+    forming = np.random.default_rng([int(seed), 619032])
+    track_count = int(forming.integers(24, 39))
+    track_segments = 0
+    for _ in range(track_count):
+        y = forming.uniform(0, circumference)
+        center = forming.uniform(.12, .86)*length
+        extent = forming.uniform(.85, 2.25)*radius
+        b = forming.uniform(.009, .035)*radius
+        contrast = forming.uniform(.035, .095)*forming.choice([-1., 1.])
+        slope = forming.normal(0, .009)
+        # Unequal finite fragments share a drawing direction, not identical
+        # parallel stripes extending from end to end.
+        for _ in range(int(forming.integers(2, 5))):
+            x = float(np.clip(center+forming.normal(0, extent*.65), 0, length))
+            stamp(x, y+forming.normal(0, b*.35), extent*forming.uniform(.30, .75),
+                  b*forming.uniform(.6, 1.3), slope,
+                  (contrast, -contrast*.45, contrast*.10), False, forming.uniform(-.3, .3))
+            track_segments += 1
+
+    # A weak continuous draw field ties those sparse marks together. Use a
+    # periodic angular spectrum and physical correlation lengths, rather than
+    # stripes or isotropic cloud noise. Fade it over the shoulder into the neck.
+    fx = np.fft.rfftfreq(width, d=dx)[None, :]
+    fy = np.fft.fftfreq(height, d=dy)[:, None]
+    spectrum = np.exp(-.5*((math.tau*.65*radius*fx)**2+(math.tau*.028*radius*fy)**2))
+    spectrum *= 1-np.exp(-(np.abs(fy)*radius/2.)**4)
+    field = np.fft.irfft2(np.fft.rfft2(forming.normal(size=(height, width)))*spectrum,
+                         s=(height, width))
+    field = np.clip(field/max(float(field.std()), 1e-8), -2.5, 2.5)
+    axial = (np.arange(width)+.5)/width
+    fade = np.clip((taper_end-axial)/(taper_end-taper_start), 0, 1)
+    field *= (.3+.7*fade[None, :])
+    planes[..., 0] += field*.032
+    planes[..., 1] -= field*.050
+
+    # Shoulder burnishing is irregular around the circumference. This is a
+    # shallow material response, not a new dent or an unlabelled stain.
+    shoulder_center = (taper_start+taper_end)*length*.5
+    shoulder_half = (taper_end-taper_start)*length*.55
+    for _ in range(9):
+        stamp(shoulder_center+forming.normal(0, shoulder_half*.20),
+              forming.uniform(0, circumference), max(dx, shoulder_half),
+              forming.uniform(.12, .45)*radius, 0, (.018, -.045, 0.))
+    neck_rubs = int(forming.integers(6, 12)) if taper_end < .99 else 0
+    for _ in range(neck_rubs):
+        stamp(forming.uniform(taper_end, 1)*length, forming.uniform(0, circumference),
+              forming.uniform(.0025, .007)*radius,
+              forming.uniform(.12, .44)*radius/end_ratio, 0,
+              (forming.uniform(.015, .045), -.035, -.008))
+
     # Only slightly shift the background grain's local strength. Broad color
     # fields and sparse marks have separate effects in the shader.
     result = np.ones((height, width, 4), dtype=np.float32)
@@ -102,6 +160,11 @@ def synthesize_details(seed, width=WIDTH, height=HEIGHT, length=8., radius=.9,
     audit = dict(version=VERSION, seed=int(seed), contacts=len(contacts),
                  traces=trace_count, specks=speck_count, patches=patch_count,
                  physical_length=length, physical_radius=radius,
+                 forming_tracks=track_count, forming_segments=track_segments,
+                 neck_rubs=neck_rubs, taper_start=taper_start, taper_end=taper_end,
+                 end_ratio=end_ratio,
+                 draw_correlation_scene_units=[.65*radius, .028*radius],
+                 draw_reflectance_amplitude=.032, draw_roughness_amplitude=.050,
                  finish_marks=marks, wear=wear, texture_size=[width, height])
     return result, audit
 
@@ -121,7 +184,10 @@ def configure_local_details(material, settings):
         return n
     params = dict(seed=int(value('seed', 42)), length=float(value('length', 8)),
                   radius=float(value('radius', .9)), wear=float(value('wear', .35)),
-                  finish_marks=float(value('finish_marks', .3)))
+                  finish_marks=float(value('finish_marks', .3)),
+                  taper_start=float(value('taper_start', .8)),
+                  taper_end=float(value('taper_end', .88)),
+                  end_ratio=float(value('end_ratio', .68)))
     signature = json.dumps(dict(version=VERSION, **params), sort_keys=True)
     tex = node('ShaderNodeTexImage', 'Inspection local detail maps')
     if tex.image is None:

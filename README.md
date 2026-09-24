@@ -1,5 +1,11 @@
 # Pipe Studio
 
+To run the latest **3,000-image targeted Fold/Dent supplement** on another
+machine, follow [the targeted-generation quick start](GENERATE_TARGETED.md).
+It includes a single-machine command, an 18-image preview, and fleet commands.
+This profile targets the three weak square-camera views at 640 × 640 with
+per-defect visibility checks, mixed defects and clean controls.
+
 For the inert assembled brass/copper product on the rolling guide, open
 **Open Assembly Track Studio.cmd**. This separate environment renders native
 1920 × 1200 images with four reflection bars and exports independent defect

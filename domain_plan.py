@@ -47,10 +47,10 @@ PREVIEW_CASES = (
     dict(primary='FOLD', size='medium', style='ELONGATED'),
     dict(primary='DENT', size='small', style='DEFAULT'),
     dict(primary='DENT', size='large', style='DOUBLE'),
-    dict(primary='SOAP_STAIN', size='small', subtype='ring'),
+    dict(primary='SOAP_STAIN', size='small', subtype='faint_film'),
     dict(primary='OIL_STAIN', size='small', subtype='acid_burn'),
     dict(primary='FOLD', size='small', style='AXIAL_PINCH', secondary='OIL_STAIN'),
-    dict(primary='SOAP_STAIN', size='small', subtype='patch', secondary='DENT'),
+    dict(primary='SOAP_STAIN', size='small', subtype='dried_island', secondary='DENT'),
 )
 
 
@@ -220,7 +220,9 @@ def _instance(settings, kind, size, instance_index, style=None, strength=None, s
             result['source_feature_ids']=['real_eval_20260914_'+style.lower()]
     else:
         if subtype is None:
-            subtype = rng.choice(('ring','speckled_residue','patch')) if kind=='SOAP_STAIN' else rng.choice(('oil_pocket','acid_burn'))
+            subtype = (rng.choices(('dried_island','faint_film','coalesced_residue','ring','speckled_residue'),
+                                  weights=(40,25,25,5,5))[0] if kind=='SOAP_STAIN'
+                       else rng.choice(('oil_pocket','acid_burn')))
         axial,angular = SPOT_RANGES[size]
         result['spot'] = dict(kind=kind, subtype=subtype, seed=rng.randrange(2000000000),
                               position=position, angle=angle, axial_size=rng.uniform(*axial),
@@ -228,6 +230,12 @@ def _instance(settings, kind, size, instance_index, style=None, strength=None, s
                               irregularity=rng.uniform(.25,.70), rotation=rng.uniform(-70,70))
         result['source_feature_ids'] = ['aug11_soap_residue_small_varied_spots' if kind=='SOAP_STAIN'
                                         else 'oil_pocket_and_acid_discoloration']
+        from soap_residue import SUBTYPES, VERSION
+        if kind=='SOAP_STAIN' and subtype in SUBTYPES:
+            result['spot']['strength']=rng.uniform(.28,.43) if subtype=='faint_film' else rng.uniform(.40,.66)
+            # Film remains flat on the metal; no bump/displacement is added.
+            result['spot']['material_version']=VERSION
+            result['source_feature_ids']=['aug12_aug13_pale_dried_soap_'+subtype]
     return result
 
 
@@ -529,9 +537,16 @@ def validate_domain_plan(plan):
                         or not 0<=spot['angle']<=360 or not .003<=spot['axial_size']<=.12
                         or not 3<=spot['angular_size']<=65 or not 0<=spot['strength']<=1):
                     raise ValueError('Stain parameters are outside supported surface coordinates.')
-        if any(abs(_location(a)['position']-_location(b)['position'])<.12
-               for i,a in enumerate(instances) for b in instances[i+1:]):
-            raise ValueError('Mixed instances must have separately visible positions.')
+        for i,a in enumerate(instances):
+            for b in instances[i+1:]:
+                separation=abs(_location(a)['position']-_location(b)['position'])
+                if separation>=.12:continue
+                specs=[item.get('spec',{}) for item in (a,b)]
+                compact=(row.get('instance_spacing_policy')=='compact-separated-v1'
+                         and all(s.get('defect_style') in ('DEFAULT','AXIAL_PINCH','BODY_BUCKLE')
+                                 and abs(s.get('defect_rotation',90))<=10 for s in specs)
+                         and separation>=max(.065,2.2*sum(s.get('width',1) for s in specs)))
+                if not compact:raise ValueError('Mixed instances must have separately visible positions.')
     return plan
 
 

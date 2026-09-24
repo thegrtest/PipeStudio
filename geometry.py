@@ -6,7 +6,7 @@ import random
 
 DENT_STYLES = ("DEFAULT", "ELONGATED", "DOUBLE", "OBLIQUE", "WRINKLED", "BRANCHED")
 FOLD_STYLES = DENT_STYLES + ("AXIAL_PINCH",)
-DEFECT_STYLES = FOLD_STYLES + ("SHALLOW_SWEEP", "SOFT_BUCKLE")
+DEFECT_STYLES = FOLD_STYLES + ("SHALLOW_SWEEP", "SOFT_BUCKLE", "BODY_BUCKLE", "CRESCENT_CREASE", "ROLLED_LIP")
 # Real shoulder/neck folds are usually short axial pinches. Retain every older
 # family, including diagonal and branching folds, as a substantial minority.
 FOLD_STYLE_WEIGHTS = (0.072, 0.080, 0.064, 0.056, 0.064, 0.064, 0.600)
@@ -190,6 +190,35 @@ def _style_form(u, v, spec, phase):
             # A manually selected pinch remains a smooth pocket; dent
             # randomization continues to use only its original six families.
             form = 0.72 * form - 0.22 * math.exp(-2.0 * (u*u + v*v))
+    elif spec.defect_style == "CRESCENT_CREASE":
+        # A short U-shaped trough at the neck/shoulder transition. A partial,
+        # unequal displaced edge catches the light beside the dark arc; no
+        # closed crater ring and no painted black line.
+        bend=.20+.14*strength
+        center=-.28+bend*v*v+spec.irregularity*.11*math.sin(2*v+phase)
+        cross=u-center
+        ends=math.exp(-.60*v*v-.42*v**4)*smoothstep((1.65-abs(v))/.45)
+        aperture=.13+.065*strength
+        core=-math.exp(-(cross/aperture)**2)
+        lip=(.16+.13*strength)*math.exp(-((cross+.24)/(.13+.025*strength))**2)
+        lip*=.85+.15*math.tanh(v+math.sin(phase))
+        pocket=-.10*math.exp(-2.4*(u-.12)**2-2.0*v*v)
+        form=(ends*(core+lip)+pocket)*smoothstep((2.0-abs(u))/.45)
+    elif spec.defect_style == "ROLLED_LIP":
+        # Inward buckle connected to the mouth, with an unequal outward lip.
+        # axial_displacement additionally lowers the rim; both skins follow it.
+        v+=spec.irregularity*.14*math.sin(2*u+phase)
+        envelope=math.exp(-.42*u*u-.10*u**4)*smoothstep((2.4-abs(u))/.5)
+        core=-.82*math.exp(-(v/.43)**2)
+        lip=(.25+.24*strength)*math.exp(-((v-.51)/.22)**2)
+        secondary=-.20*strength*math.exp(-((v+.57)/.28)**2)
+        form=envelope*(core+lip+secondary)*smoothstep((1.7-abs(v))/.40)
+        # The base of the same buckle terminates in a short crescent. Keeping
+        # it connected gives one support/box, like the real neck-and-rim label.
+        cross=u+1.40-.20*v*v
+        ends=math.exp(-.70*v*v-.45*v**4)*smoothstep((1.65-abs(v))/.40)
+        curl=-math.exp(-(cross/.16)**2)+.32*math.exp(-((cross+.24)/.14)**2)
+        form+=.48*ends*curl*smoothstep((2.4-abs(u))/.4)
     elif spec.defect_style == "SHALLOW_SWEEP":
         # A wide, shallow press with rounded ends and no circular crater rim.
         # Compact C1 support labels the complete deformed area, including the
@@ -202,9 +231,13 @@ def _style_form(u, v, spec, phase):
         # Small displaced shoulder on one side, never a complete raised ring.
         form += (.025 + .035*strength) * math.exp(-5*(x+.22)**2-28*(y-.75*side)**2)
         form *= smoothstep((2.0-abs(u))/.35) * smoothstep((1.3-abs(v))/.30)
-    elif spec.defect_style == "SOFT_BUCKLE":
+    elif spec.defect_style in ("SOFT_BUCKLE", "BODY_BUCKLE"):
         # Rounded shoulder/neck collapse seen at the silhouette: a soft trough
         # beside an unequal lip, without a triangular or razor-like apex.
+        # The body case crosses the drawing direction: a short transverse
+        # rounded trough and unequal lip, matching the September 23 examples.
+        # Swapping normalized axes avoids abusing the UI's rotation bounds.
+        if spec.defect_style == 'BODY_BUCKLE': u, v = v, u
         side = 1 if math.sin(phase) >= 0 else -1
         longitudinal = u + .10*math.sin(phase)
         transverse = side*v + .10*spec.irregularity*math.sin(2*u+phase)
@@ -241,6 +274,25 @@ def _style_form(u, v, spec, phase):
     return math.tanh(1.5 * form) / math.tanh(1.5)
 
 
+def axial_displacement(t, theta, spec):
+    """Smooth rolled-down rim, not a tear or removed patch of wall.
+
+    The drop is at most one quarter of the affected axial span. Its smoothstep
+    derivative therefore stays below .375 of the axial scale, preserving ring
+    order and wall closure even at the maximum supported depth.
+    """
+    if spec.defect=='NONE' or spec.depth==0 or spec.defect_style!='ROLLED_LIP':return 0.
+    onset=max(spec.taper_end,min(.94,spec.position-1.5*spec.width))
+    if onset>=1 or t<=onset:return 0.
+    da=math.atan2(math.sin(theta-math.radians(spec.angle)),math.cos(theta-math.radians(spec.angle)))
+    v=da/math.radians(spec.arc)
+    phase=(spec.seed%997)*.217
+    angular=math.exp(-((v+.40+.08*math.sin(phase))/.65)**2)
+    angular*=smoothstep((1.7-abs(v))/.4)
+    drop=min(spec.depth*radius_at(1,spec)*(1.5+1.5*spec.secondary_strength),.25*spec.length*(1-onset))
+    return -drop*smoothstep((t-onset)/(1-onset))*angular
+
+
 def displacement(t, theta, spec):
     """A bounded local radial displacement; no mechanics/strain simulation."""
     if spec.defect == "NONE" or spec.depth == 0:
@@ -273,6 +325,8 @@ def displacement(t, theta, spec):
     # Geometric support mask: >= 3% of the nominal peak displacement.
     # This is explicitly not a human visibility/defect acceptance threshold.
     mask = 1.0 if abs(form) >= 0.03 else 0.0
+    if spec.defect_style=='ROLLED_LIP' and abs(axial_displacement(t,theta,spec))>=.03*spec.depth*spec.radius:
+        mask=1.
     return amount, mask
 
 
@@ -308,10 +362,16 @@ def sampling_grid(spec, axial=144, radial=128, adaptive=False):
         'AXIAL_PINCH': (2.10, 1.60, 1.00, .28),
         'SHALLOW_SWEEP': (2.00, 1.30, 1.20, .80),
         'SOFT_BUCKLE': (2.00, 1.65, 1.00, .43),
+        'BODY_BUCKLE': (1.65, 2.00, .43, 1.00),
+        'CRESCENT_CREASE': (2.00, 1.65, .18, 1.00),
+        'ROLLED_LIP': (2.40, 1.70, .85, .22),
     }[spec.defect_style]
     half_x = co * sx * extent_u + si * sy * extent_v
     half_y = si * sx * extent_u + co * sy * extent_v
     low, high = max(0.0, spec.position-half_x/spec.length), min(1.0, spec.position+half_x/spec.length)
+    if spec.defect_style=='ROLLED_LIP':
+        low=min(low,spec.taper_end);high=1.
+        half_y=max(half_y,sy*1.7)
     half_angle = min(math.pi, half_y/local_radius)
     # The fold's one-sided Gaussian lip is narrower than its envelope. Aim
     # for six samples per narrow physical sigma (more across the full trough).
@@ -323,6 +383,12 @@ def sampling_grid(spec, axial=144, radial=128, adaptive=False):
         sigma_u, sigma_v = sx * .40, sy * .09
     elif spec.defect_style == 'SOFT_BUCKLE':
         sigma_u, sigma_v = sx * .40, sy * .20
+    elif spec.defect_style == 'BODY_BUCKLE':
+        sigma_u, sigma_v = sx * .20, sy * .40
+    elif spec.defect_style=='CRESCENT_CREASE':
+        sigma_u,sigma_v=sx*.09,sy*.32
+    elif spec.defect_style=='ROLLED_LIP':
+        sigma_u,sigma_v=sx*.10,sy*.12
     step_x = 1 / (6 * math.hypot(co/sigma_u, si/sigma_v))
     step_y = 1 / (6 * math.hypot(si/sigma_u, co/sigma_v))
     step_t, step_angle = step_x/spec.length, step_y/local_radius
@@ -368,7 +434,8 @@ def build_mesh(spec, axial=144, radial=128, adaptive=False):
                 delta, mask = displacement(t, theta, spec)
                 # Apply the same displacement to both skins, retaining radial wall thickness.
                 r = nominal + delta - (spec.radius * spec.wall_ratio if inner else 0)
-                vertices.append(((t - 0.5) * spec.length, r * math.cos(theta), r * math.sin(theta)))
+                axial_offset=axial_displacement(t,theta,spec)
+                vertices.append(((t - 0.5) * spec.length+axial_offset, r * math.cos(theta), r * math.sin(theta)))
                 masks.append(mask if not inner else 0.0)
     offset = rings * radial
     for i in range(axial):

@@ -8,14 +8,31 @@ from geometry import radius_at
 def dent_detail(seed,index,spec,base):
     rng=random.Random(seed ^ (0x71A9+index*104729))
     draw=rng.random()
-    family='small_circular' if draw<.65 else 'shallow_circular' if draw<.85 else 'large_varied'
+    # Production examples include more than compact round dings. A common
+    # miss is a shallow, circumferentially wide depression whose only cue is a
+    # softly bent reflection band. Keep the old families, but reserve a
+    # substantial share of new specimens for that hard case.
+    family=('small_circular' if draw<.40 else
+            'shallow_circular' if draw<.62 else
+            'shallow_band' if draw<.88 else
+            'large_varied')
     if family=='large_varied':return dict(dent_family=family)
-    radius=rng.uniform(.085,.19) if family=='small_circular' else rng.uniform(.20,.35)
+    if family=='small_circular':
+        radius=rng.uniform(.085,.19);aspect=rng.uniform(.92,1.10);rotation=rng.uniform(-math.pi,math.pi)
+        depth=radius*rng.uniform(.055,.16)
+    elif family=='shallow_circular':
+        radius=rng.uniform(.20,.35);aspect=rng.uniform(.85,1.15);rotation=rng.uniform(-math.pi,math.pi)
+        depth=rng.uniform(.004,.014)
+    else:
+        # aspect < 1 shortens the axial footprint while leaving a broader
+        # circumferential footprint. Small rotation keeps the deformation
+        # band-like instead of turning it into another long axial crease.
+        radius=rng.uniform(.16,.30);aspect=rng.uniform(.48,.78);rotation=rng.uniform(-.28,.28)
+        depth=rng.uniform(.007,.022)
     # Depth is independent of footprint; shallow does not mean simply scaled
     # down from a deep crater. No complete raised rim or sharp cut edge.
-    depth=radius*rng.uniform(.055,.16) if family=='small_circular' else rng.uniform(.004,.014)
-    detail=dict(radius=radius,depth=depth,aspect=rng.uniform(.92,1.10),
-                rotation=rng.uniform(-math.pi,math.pi),asymmetry=rng.uniform(0,.055),phase=rng.uniform(0,math.tau))
+    detail=dict(radius=radius,depth=depth,aspect=aspect,
+                rotation=rotation,asymmetry=rng.uniform(0,.075),phase=rng.uniform(0,math.tau))
     local_radius=radius_at(spec['position'],base)
     spec.update(width=max(.01,radius/base.length),arc=max(8,math.degrees(radius/local_radius)),
                 depth=depth/local_radius,defect_style='DEFAULT',irregularity=.03,defect_rotation=0)
