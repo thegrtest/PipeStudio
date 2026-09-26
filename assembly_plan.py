@@ -53,7 +53,7 @@ def make_specimen(seed, condition=None, look='CAMERA_MATCHED', lighting='BALANCE
         spec = asdict(base)
         # Camera-facing sector at the middle capture, including near-silhouette
         # cases. Subsequent frames can legitimately hide the same defect.
-        angle = ((36 if look=='CAMERA_MATCHED' else 12) + rng.uniform(-48, 48) - math.degrees(initial_roll)) % 360
+        angle = ((42 if look=='WARM_TRACK' else 36 if look=='CAMERA_MATCHED' else 12) + rng.uniform(-48, 48) - math.degrees(initial_roll)) % 360
         small = rng.random() < .55
         spec.update(defect='DENT', position=rng.uniform(.16, .84), angle=angle,
                     irregularity=rng.uniform(.15, .55),
@@ -89,7 +89,7 @@ def make_specimen(seed, condition=None, look='CAMERA_MATCHED', lighting='BALANCE
             # is an independent thin, tapered groove with a matching support.
             spec.update(depth=.05, width=.07, arc=8, defect_style='AXIAL_PINCH')
         item = dict(instance_id=index, kind=kind, class_id=DEFECT_CLASSES.index(kind), spec=spec)
-        if kind=='dent' and look in ('REFINED','CAMERA_MATCHED'):
+        if kind=='dent' and look in ('REFINED','CAMERA_MATCHED','WARM_TRACK'):
             from assembly_dents import dent_detail
             item.update(dent_detail(seed,index,spec,base))
         if kind == 'scratch':
@@ -106,7 +106,7 @@ def make_specimen(seed, condition=None, look='CAMERA_MATCHED', lighting='BALANCE
                     bar_balance=[env_rng.uniform(.92, 1.08) for _ in range(4)],
                     light_shift=env_rng.uniform(-.12, .12),
                     softness_px=env_rng.uniform(.35, .70),
-                    noise=env_rng.uniform(.007, .012)))
+                    noise=env_rng.uniform(.014, .018) if look=='WARM_TRACK' else env_rng.uniform(.007, .012)))
 
 
 def capture_pose(recipe, index, frames=3):
@@ -120,7 +120,7 @@ def capture_pose(recipe, index, frames=3):
                 guide_clearance=0.0, frame_index=index)
 
 
-def make_plan(count=15, seed=260915,look='CAMERA_MATCHED',lighting='BALANCED',defect_set='ALL'):
+def make_plan(count=15, seed=260915,look='CAMERA_MATCHED',lighting='BALANCED',defect_set='ALL',strict=False):
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise ValueError('Count must be a positive integer')
     if defect_set not in DEFECT_SETS:raise ValueError('Unknown defect set: '+defect_set)
@@ -130,14 +130,23 @@ def make_plan(count=15, seed=260915,look='CAMERA_MATCHED',lighting='BALANCED',de
     # from one specimen always share its split_group and physical finish.
     rows=[]
     for index in range(count):
-        specimen_index=index // 3
+        specimen_index=index if strict else index // 3
         recipe=make_specimen(seed + specimen_index, schedule[specimen_index % len(schedule)],look,lighting,allowed)
         frame=index % 3
-        companion_condition='good' if recipe['condition']=='good' else (allowed[(specimen_index+1)%2] if defect_set=='DENTS_FOLDS' else CONDITIONS[(specimen_index+2)%5])
+        companion_condition='good' if strict or recipe['condition']=='good' else (allowed[(specimen_index+1)%2] if defect_set=='DENTS_FOLDS' else CONDITIONS[(specimen_index+2)%5])
         companion=make_specimen(seed+100000+specimen_index,companion_condition,look,lighting,allowed)
+        pose=capture_pose(recipe,frame)
+        if strict:
+            from assembly_quality import strict_recipe
+            recipe=strict_recipe(recipe)
+            # Independent still specimens avoid changing a tracked physical
+            # defect when bounded repairs adjust its geometry or angle.
+            frame=0
+            pose=dict(travel=random.Random(seed+index+39017).uniform(-1.8,2.8),
+                      roll=recipe['initial_roll'],guide_clearance=None,frame_index=0)
         rows.append(dict(sample_id=f"{recipe['specimen_id']}_f{frame:03d}",
                          split_group=recipe['specimen_id'], recipe=recipe,
-                         companions=[companion],pose=capture_pose(recipe, frame)))
+                         companions=[] if look=='WARM_TRACK' else [companion],pose=pose))
     return rows
 
 

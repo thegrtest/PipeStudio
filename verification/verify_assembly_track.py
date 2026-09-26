@@ -10,17 +10,30 @@ from PIL import Image,ImageFilter
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from assembly_plan import visible_box,yolo_line
-from assembly_generate import complete
+from assembly_generate import complete,finished
 from domain_render import atomic_json
 
 
 def verify(root):
     root=Path(root)
     plan=json.loads((root/'plan.json').read_text())
-    result=dict(frames=0,parts=0,defects=Counter(),image_sizes=Counter())
+    result=dict(frames=0,rejected=0,parts=0,defects=Counter(),image_sizes=Counter())
     for row in plan['rows']:
+        if not complete(root,row) and finished(root,row):
+            assert not (root/'all/images'/(row['sample_id']+'.png')).exists()
+            assert not (root/'all/labels'/(row['sample_id']+'.txt')).exists()
+            result['rejected']+=1;continue
         assert complete(root,row),row['sample_id']
         info=json.loads((root/'metadata'/(row['sample_id']+'.json')).read_text())
+        if row['recipe'].get('quality_profile'):
+            from assembly_quality import VERSION
+            qa=info['visibility_quality']
+            assert qa['version']==VERSION and qa['passed'] is True
+            assert qa['beauty_sha256']==info['sha256'][info['image']]
+            assert len(qa['instances'])==len(info['annotations'])
+            for entry in qa['instances']:
+                assert entry['passed'] and entry['screen']['passed'] and entry['counterfactual']['passed']
+            assert not info['hidden_defects']
         w,h=Image.open(root/info['image']).size
         assert (w,h)==(info['width'],info['height'])
         result['image_sizes'][str((w,h))]+=1

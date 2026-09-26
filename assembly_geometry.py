@@ -6,7 +6,7 @@ from domain_geometry import instance_grid, _bounded_sum
 from geometry import PipeSpec, radius_at, displacement
 
 
-def build_assembly_body(recipe):
+def build_assembly_body(recipe,omit_instances=()):
     base=PipeSpec(**recipe['base'])
     items=recipe['instances']
     proxies=[dict(kind=i['spec']['defect'], spec=i['spec']) for i in items]
@@ -29,7 +29,9 @@ def build_assembly_body(recipe):
     t,a=np.meshgrid(ts,angles,indexing='ij'); t=t.ravel(); a=a.ravel()
     nominal=np.asarray([radius_at(v,base) for v in t])
     total=np.zeros_like(t); supports=[]
-    for item,spec in zip(items,specs):
+    for index,(item,spec) in enumerate(zip(items,specs)):
+        if index in omit_instances:
+            supports.append(np.zeros_like(t,dtype=np.float32));continue
         if 'round_dent' in item:
             from assembly_dents import round_dent_field
             field,support=round_dent_field(t,a,item,base)

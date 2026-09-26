@@ -24,7 +24,7 @@ def grain_field(seed,length,radius,width=1024,height=768):
 
 
 def configure_finish(material,recipe):
-    if recipe.get('look')!='CAMERA_MATCHED':return
+    if recipe.get('look') not in ('CAMERA_MATCHED','WARM_TRACK'):return
     n=material.node_tree.nodes
     grain=n['Inspection statistical grain'].image
     params=dict(version=VERSION,seed=recipe['seed'],length=recipe['base']['length'],radius=recipe['base']['radius'])
@@ -46,5 +46,14 @@ def configure_finish(material,recipe):
     if n.get('Assembly camera roughness variation'):
         n['Assembly camera roughness variation'].inputs[1].default_value=.06
         n['Assembly camera roughness variation'].inputs[2].default_value=-.03
+    if recipe.get('look')=='WARM_TRACK':
+        # The second station is burnished at camera scale. Fine drawn grain
+        # remains, but the former high-amplitude mottling looks like corrosion.
+        n['Inspection statistical grain multiplier'].inputs['To Min'].default_value=.50
+        n['Inspection statistical grain multiplier'].inputs['To Max'].default_value=1.50
+        for shader in ('BrassShader','PolishedBrass','DullOxide'):
+            n['Inspection measured grain '+shader].inputs[0].default_value=.65
+        params['station']='WARM_TRACK';params['grain_mix']=.65
+        signature=json.dumps(params,sort_keys=True)
     material['assembly_finish_version']=VERSION
     material['assembly_finish_parameters']=signature

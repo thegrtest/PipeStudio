@@ -3,16 +3,22 @@ import math
 import random
 
 LIGHTING_PRESETS=('CURRENT','FOUR_LINES','BALANCED')
-LOOKS=('ORIGINAL','REFINED','CAMERA_MATCHED')
+LOOKS=('ORIGINAL','REFINED','CAMERA_MATCHED','WARM_TRACK')
 
 
 def companion_offset(recipe):
-    if recipe.get('look')=='CAMERA_MATCHED':return 8.0
+    if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):return 8.0
     return -13.0 if recipe.get('look','ORIGINAL')=='REFINED' else -18.0
 
 
-def profile(name):
+def profile(name,look=None):
     if name not in LIGHTING_PRESETS:raise ValueError('Unknown assembly lighting preset')
+    if look=='WARM_TRACK':
+        return {
+            'CURRENT':dict(width=6.0,power=58000,roughness=(.19,.25),heights=(.58,.24,-.08,-.37)),
+            'FOUR_LINES':dict(width=.8,power=66000,roughness=(.09,.14),heights=(.58,.24,-.08,-.37)),
+            'BALANCED':dict(width=3.2,power=46000,roughness=(.17,.23),heights=(.58,.24,-.08,-.37)),
+        }[name]
     return {
         'CURRENT':dict(width=.8,power=11250,roughness=None,positions=((-100,25),(-36,35),(7,40),(70,30))),
         'FOUR_LINES':dict(width=.7,power=52000,roughness=(.075,.12),heights=(.82,.60,.38,.15)),
@@ -28,7 +34,7 @@ def configure_surface(mat,recipe):
         v=n.get(name)
         if v is None:v=n.new(kind);v.name=v.label=name
         return v
-    if recipe.get('look','ORIGINAL') in ('REFINED','CAMERA_MATCHED'):
+    if recipe.get('look','ORIGINAL') in ('REFINED','CAMERA_MATCHED','WARM_TRACK'):
         n['OxideAmount'].outputs[0].default_value=min(.8,recipe['finish']['oxide_amount']*.7+.30)
         n['PolishAmount'].outputs[0].default_value=recipe['finish']['polish_amount']*.73
         ramp=n['OxideColors'].color_ramp
@@ -42,11 +48,11 @@ def configure_surface(mat,recipe):
         for shader in ('BrassShader','PolishedBrass','DullOxide'):
             tint=node('ShaderNodeMixRGB','Assembly neck tint '+shader);tint.blend_type='MULTIPLY'
             tint.inputs[2].default_value=(.62,.47,.33,1)
-            if recipe.get('look')=='CAMERA_MATCHED':
+            if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
                 neck.inputs['To Max'].default_value=.86
                 tint.inputs[2].default_value=(.20,.12,.07,1)
             link(n['Inspection localized color '+shader].outputs[0],tint.inputs[1]);link(neck.outputs[0],tint.inputs[0]);link(tint.outputs[0],n[shader].inputs['Base Color'])
-    rig=profile(recipe.get('lighting','CURRENT'))
+    rig=profile(recipe.get('lighting','CURRENT'),recipe.get('look'))
     for shader in ('BrassShader','PolishedBrass'):
         source=n['Inspection local roughness '+shader].outputs[0]
         if rig['roughness']:
@@ -54,7 +60,7 @@ def configure_surface(mat,recipe):
             mapped.inputs['From Min'].default_value=.10;mapped.inputs['From Max'].default_value=.55
             mapped.inputs['To Min'].default_value=rig['roughness'][0];mapped.inputs['To Max'].default_value=rig['roughness'][1]
             link(source,mapped.inputs[0]);source=mapped.outputs[0]
-        if recipe.get('look')=='CAMERA_MATCHED':
+        if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
             if recipe.get('lighting')=='BALANCED':
                 # Retain broad drawn-finish variation at the smaller native
                 # object size instead of compressing it out of all four bands.
@@ -80,14 +86,15 @@ def configure_surface(mat,recipe):
 
 def configure_lights(scene,recipe,multiplier=1.0):
     from pipe_studio import aim
-    env=recipe['environment'];name=recipe.get('lighting','CURRENT');p=profile(name)
+    env=recipe['environment'];name=recipe.get('lighting','CURRENT');p=profile(name,recipe.get('look'))
+    warm=recipe.get('look')=='WARM_TRACK'
     # Four incident directions solve reflection about four surface normals.
     # They are real emitters; dents distort the bands rather than a 2D overlay.
     view_angle=math.atan2(scene.camera.location.z-.62,scene.camera.location.y)
     for obj in scene.objects:
         if 'reflection_bar_index' not in obj:continue
         i=obj['reflection_bar_index']
-        if name=='CURRENT':
+        if name=='CURRENT' and not warm:
             y,z=p['positions'][i];length=125
         else:
             height=(.60,.28,-.02,-.28)[i] if recipe.get('look')=='CAMERA_MATCHED' and name=='BALANCED' else p['heights'][i]
@@ -101,6 +108,9 @@ def configure_lights(scene,recipe,multiplier=1.0):
             # Isolated native patches locate bar 0 at the TOP of the body.
             # Measured row profiles show one strong band and three quieter ones.
             balance*=(10.0,.38,.30,.20)[i]
+        if warm:
+            obj.data.color=(1,.72,.40)
+            balance*=(1.65,1.20,1.0,.72)[i] if name!='FOUR_LINES' else 1.0
         obj.data.energy=p['power']*env['light_scale']*balance*multiplier
         obj['preset_power']=float(obj.data.energy/max(multiplier,1e-9))
     scene['assembly_lighting_preset']=name
@@ -136,12 +146,14 @@ def refine_part(scene,rig,body,recipe):
     texture=next(v for v in n if v.type=='TEX_NOISE');texture.inputs['Scale'].default_value=105
     variation=n.new('ShaderNodeValToRGB');variation.color_ramp.elements[0].color=(.28,.09,.04,1)
     variation.color_ramp.elements[1].color=(.70,.31,.16,1)
-    if recipe.get('look')=='CAMERA_MATCHED':
+    if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
         variation.color_ramp.elements[0].color=(.12,.035,.016,1)
         variation.color_ramp.elements[1].color=(.30,.105,.055,1)
         texture.inputs['Scale'].default_value=28
         rough=next(v for v in n if v.type=='MAP_RANGE')
         rough.inputs['To Min'].default_value=.19;rough.inputs['To Max'].default_value=.30
+        if recipe.get('look')=='WARM_TRACK':
+            rough.inputs['To Min'].default_value=.30;rough.inputs['To Max'].default_value=.42
         # Drawn copper has fine axial streaking in addition to broad tarnish.
         coords=next(v for v in n if v.type=='TEX_COORD')
         stretch=n.new('ShaderNodeVectorMath');stretch.operation='MULTIPLY';stretch.inputs[1].default_value=(.5,6,6)
@@ -261,7 +273,7 @@ def refine_environment(scene,recipe):
     data=bpy.data.lights.new(PREFIX+'Soft oxide fill','AREA');data.shape='RECTANGLE';data.size=45;data.size_y=18;data.energy=5200
     if hasattr(data,'specular_factor'):data.specular_factor=0.0
     obj=bpy.data.objects.new(data.name,data);scene.collection.objects.link(obj);obj.location=(-15,-28,9);data.color=(1,.82,.59);aim(obj,(0,-8,.7))
-    if recipe.get('look')=='CAMERA_MATCHED':
+    if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
         # specular_factor alone left a fifth broad highlight in Cycles.
         obj.visible_glossy=False
         data.energy=3500
@@ -269,7 +281,7 @@ def refine_environment(scene,recipe):
     for part in scene.objects:
         if 'part_class_id' in part:receivers.objects.link(part)
     obj.light_linking.receiver_collection=receivers;scene['assembly_fill_receiver']=receivers.name
-    if recipe.get('look')=='CAMERA_MATCHED':
+    if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
         # These emitters fit the part's photographed reflections. Lighting the
         # proxy floor with them adds deep shadows absent from the camera plate.
         # Ambient illumination still supplies the rendered contact shadow.

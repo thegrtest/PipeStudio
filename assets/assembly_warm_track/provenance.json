@@ -1,0 +1,16 @@
+{
+  "source_reference": "codex-clipboard-9d06dc72-6bd4-481b-b41f-5bb9c168ad1b.jpg",
+  "source_sha256": "3326ba67893f6db5e2305e2d25efdcf33231b862c211f52665c268f87d853cb4",
+  "plate_sha256": "d1ffcebb6db21ae02d1a8664010f57460757165bed5629e9589352974a5205b7",
+  "plate_size": [
+    1586,
+    992
+  ],
+  "output_size": [
+    1920,
+    1200
+  ],
+  "method": "Built-in imagegen precise object removal from user reference. Original assembly and its shadow removed. Not a verified empty camera exposure.",
+  "scope": "Background only; procedural Blender foreground and geometric labels",
+  "date": "2026-09-25"
+}

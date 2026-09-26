@@ -1,5 +1,83 @@
 # Inert assembly inspection track
 
+## Strict visibility (default for new exports)
+
+Both `CAMERA_MATCHED` and `WARM_TRACK` now use the same default quality gate.
+Every positive must survive a 640-pixel detector-input resize with at least a
+5-pixel short side, 9-pixel long side, 36 support pixels and 3-pixel average
+support thickness. Dark, nearly flat and glare-obscured supports are rejected.
+These necessary size and exposure checks are followed by a matched render with
+one defect removed, retaining the other defects, finish, pose, lights, blur and
+camera-noise seed. Acceptance also requires a coherent RGB change above render
+noise and local surface texture. Texture is measured along the projected shell
+axis so that straight inspection-light bars are not mistaken for grain; a
+localized bend in those bars must still beat the texture and change thresholds.
+Thresholds and measurements are saved in each
+image's `visibility_quality` record; they are observability proxies, not YOLOX
+accuracy claims.
+
+Strict generation uses independent still specimens instead of three rolling
+views of one specimen. Position and orientation still vary, but bounded repairs
+can enlarge/deepen/reorient a defect without creating inconsistent physical
+tracking sequences. Companions are clean. Four attempts are allowed; a failed
+candidate is recorded in `rejections/` and neither its RGB nor its labels enter
+`all/`, `tracking/`, `train.txt` or `val.txt`. Failed labels are never silently
+dropped from an otherwise accepted image. Clean controls remain intentional.
+`--count` is the candidate budget; accepted/rejected totals are reported separately.
+The local-only `--no-strict-visibility` option reproduces the earlier ungated
+planning behavior. The fleet always enables the strict gate.
+
+The conservative retrospective cleanup tool is
+`verification/audit_assembly_dataset.py`. It screens only names matching
+`assembly_<digits>_f<digits>` and writes an audit without modifying data.
+`verification/remove_flagged_assembly.ps1` applies that audit to an explicitly
+matched dataset root, validates identical mirrored image hashes and unchanged
+labels, and removes whole image/label pairs. This older-data screen has only
+RGB and boxes; a retained image has not passed the counterfactual gate.
+
+To collect accepted pairs while remote generation continues, use
+`remote/collect_strict_assembly.py --run <local-fleet-run-folder> --output <dataset-all-folder> --single-class 0`.
+Repeat `--run` to include multiple fleet runs. The output folder must already
+contain `images/` and `labels/`. The collector checks quality records, image and
+label hashes, dimensions and boxes, then maps defect labels to the requested
+class. It preserves clean controls and excludes part-tracking labels. Existing
+matching pairs are skipped; conflicting files stop collection. Receipts and
+original source labels are saved under `exports/assembly_imports/`. Collection
+does not update dataset splits, class names or cached training annotations.
+
+## Warm LED track (second assembly camera)
+
+Select **Warm LED track / second camera** in the editor, or use `--look WARM_TRACK`.
+This profile fits the September 25 reference to a nominal 572-pixel assembly
+centered at (560, 745) in a 1920 × 1200 frame. It uses a single assembly moving
+along the observed guide edge, warm reflection bars, restrained grain, softer
+copper reflections and slight camera softness. Camera pose and travel are
+inferred from the photograph, not measured machine calibration.
+
+`CURRENT`, `BALANCED` and `FOUR_LINES` give broad, intermediate and crisp
+reflections in this profile. The original camera and its lighting are retained.
+The new background is an **AI-edited reference photograph with its original
+assembly removed**, not an independently captured empty frame. Its source hash,
+asset size and edit provenance live in `assets/assembly_warm_track/provenance.json`.
+The compositor fits that plate to the native output resolution; all parts,
+defects, masks and contact shadows are rendered. A genuine empty exposure would
+be preferable for a later background calibration pass.
+
+For a 30-frame review on the two remote GPUs (15 per device):
+
+```powershell
+.\.venv\Scripts\python.exe remote/assembly_fleet.py launch --nodes spark,agx --count 15 --seed 925280 --samples 96 --look WARM_TRACK --lighting MIXED --defect-set ALL
+```
+
+`MIXED` retains the fleet's 70% balanced / 15% broad / 15% crisp sampling,
+independent of class (and stable across rolling views in legacy non-strict mode).
+Choose a fixed preset with `--lighting` for a lighting ablation. `ALL` includes
+dent, ding, scratch, deformity and clean specimens; `DENTS_FOLDS` retains the
+existing focused production mix. Output has separate defect and component
+tracking datasets. The strict screen and matched counterfactual check described
+above reject weak evidence before publication. These are image-quality checks;
+they do not establish that a trained detector will transfer to real images.
+
 Open `Open Assembly Track Studio.cmd` for the native Blender editor. The
 **Assembly Studio** sidebar changes the specimen seed, primary defect,
 position/roll, bar brightness and exposure. F12 renders the camera. Dataset
@@ -70,8 +148,9 @@ compact displacement replaces raised crater rims on the circular families;
 diameter and depth vary independently. Local mesh refinement resolves these
 features and the same displacement field supplies each label mask. Circular
 means round in the surface's physical tangent coordinates; camera perspective
-can make it appear elliptical. Very shallow dents can be hard to see; labels
-represent geometric support, not guaranteed human/model detectability.
+can make it appear elliptical. Older exports label geometric support even when
+the dent is hard to see. New strict exports require rendered evidence as well;
+neither method is a guarantee of model detectability.
 
 The revised fixtures have a curved rail face with more localized gold
 reflections, rounded nylon strip ends, quiet broad track variation, and less

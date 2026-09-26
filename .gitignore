@@ -40,3 +40,4 @@ Desktop.ini
 # Keep verification source; reports and local experiments are reproducible.
 /verification/*
 !/verification/*.py
+!/verification/remove_flagged_assembly.ps1

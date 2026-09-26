@@ -86,9 +86,9 @@ def snapshot():
     paths += list((ROOT/'flashlight_lab').glob('*.py'))+list((ROOT/'flashlight_lab/assets').glob('*.png'))
     paths += [p for p in (ROOT/'references').glob('*') if p.suffix.lower() in ('.png','.jpg','.jpeg')]
     if (ROOT/'assembly_generate.py').is_file():
-        from assembly_camera_match import PLATES
-        paths += [ROOT/'assets/assembly_cam3936'/name for name in PLATES]
-        paths += [ROOT/'assets/assembly_cam3936/provenance.json',ROOT/'verification/verify_assembly_track.py']
+        from assembly_camera_match import plate_assets
+        paths += [ROOT/name for name in plate_assets()]
+        paths += [ROOT/'verification/verify_assembly_track.py']
     contents = {p.relative_to(ROOT).as_posix():p.read_bytes() for p in sorted(set(paths))}
     if any(digest_file(ROOT/name)!=hashlib.sha256(data).hexdigest() for name,data in contents.items()):
         raise RuntimeError('Renderer files changed during packaging; retry when the edit is saved')

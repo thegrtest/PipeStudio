@@ -31,6 +31,7 @@ def change_roll(self,context):
 
 
 def add_companion(scene,recipe,travel):
+    if recipe.get('look')=='WARM_TRACK':return
     from assembly_scene import make_assembly
     condition='good' if recipe['condition']=='good' else 'dent'
     other=make_specimen(recipe['seed']+100000,condition,recipe.get('look','REFINED'),recipe.get('lighting','BALANCED'))
@@ -60,7 +61,7 @@ def change_lighting(self,context):
 class ASSEMBLY_Settings(bpy.types.PropertyGroup):
     seed:IntProperty(name='Specimen seed',default=260916,min=0,max=2000000000)
     condition:EnumProperty(name='Primary condition',items=[(v,v.title(),'') for v in CONDITIONS],default='dent')
-    look:EnumProperty(name='Scene version',items=[('ORIGINAL','Original — preserved',''),('REFINED','Refined procedural environment',''),('CAMERA_MATCHED','Elevated camera / real empty track','Rendered parts and shadows over verified empty camera frames')],default='CAMERA_MATCHED')
+    look:EnumProperty(name='Scene version',items=[('ORIGINAL','Original — preserved',''),('REFINED','Refined procedural environment',''),('CAMERA_MATCHED','Elevated camera / real empty track','Rendered parts and shadows over verified empty camera frames'),('WARM_TRACK','Warm LED track / second camera','AI-cleaned reference background; rendered parts and defects')],default='CAMERA_MATCHED')
     lighting:EnumProperty(name='Lighting preset',items=[('CURRENT','Current lighting',''),('FOUR_LINES','Four crisp reflection lines',''),('BALANCED','Balanced / in between','')],default='BALANCED',update=change_lighting)
     travel:FloatProperty(name='Roll along guide',default=0,min=-8,max=8,update=change_roll)
     count:IntProperty(name='Frames to export',default=120,min=1,max=100000)

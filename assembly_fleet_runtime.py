@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-from assembly_generate import complete, finalize
+from assembly_generate import complete, finished, finalize
 
 
 def supervise(root, job, lock):
@@ -33,12 +33,14 @@ def supervise(root, job, lock):
             while True:
                 # Verify only newly committed rows; a new supervisor verifies
                 # the entire existing prefix before allowing it to be skipped.
-                while verified < len(rows) and complete(folder, rows[verified]):
+                while verified < len(rows) and finished(folder, rows[verified]):
                     verified += 1
                 state = 'complete' if verified == len(rows) else 'running'
                 if state != 'complete' and ((folder / 'cancel.flag').exists() or (folder / 'STOP').exists()):
                     state = 'paused'
                 result = dict(state=state, completed=verified, total=len(rows), pipeline='assembly',
+                              accepted=len(list((folder/'metadata').glob('*.json'))),
+                              rejected=len(list((folder/'rejections').glob('*.json'))),
                               pid=os.getpid(), failures=failures,
                               elapsed_seconds=round(time.monotonic() - started, 1))
                 write_json(folder / 'fleet_status.json', result)
@@ -54,6 +56,7 @@ def supervise(root, job, lock):
                             '--chunk', str(chunk), '--verified-prefix', str(verified), '--resume']
                 for name in ('count', 'seed', 'samples', 'scale', 'look', 'lighting', 'defect_set'):
                     command += ['--' + name.replace('_', '-'), str(settings[name])]
+                if not settings.get('strict_visibility',True):command.append('--no-strict-visibility')
                 with (folder / 'render.log').open('a') as log:
                     try:
                         child = subprocess.run(command, cwd=release, env=env, stdin=subprocess.DEVNULL,
@@ -63,7 +66,7 @@ def supervise(root, job, lock):
                         code = child.returncode
                     except subprocess.TimeoutExpired:
                         code = -999
-                progressed = complete(folder, rows[verified])
+                progressed = finished(folder, rows[verified])
                 failures = 0 if progressed else failures + 1
                 if failures >= 3:
                     raise RuntimeError(f'Three attempts made no progress (exit {code}); see render.log')

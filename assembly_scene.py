@@ -222,7 +222,7 @@ def make_assembly(scene,recipe):
     for vertex in ferrule.data.vertices:
         vertex.co.x=s+(vertex.co.x-s)*.70
     for obj in rig.children:obj['specimen_id']=recipe['specimen_id']
-    if recipe.get('look','ORIGINAL') in ('REFINED','CAMERA_MATCHED'):
+    if recipe.get('look','ORIGINAL') in ('REFINED','CAMERA_MATCHED','WARM_TRACK'):
         from assembly_realism import refine_part
         refine_part(scene,rig,body,recipe)
     return rig,body
@@ -233,14 +233,14 @@ def build_scene(recipe,samples=96,scale=1):
     rig,body=make_assembly(scene,recipe)
     make_environment(scene,recipe)
     data=bpy.data.cameras.new(PREFIX+'Camera');camera=bpy.data.objects.new(data.name,data);scene.collection.objects.link(camera)
-    refined=recipe.get('look','ORIGINAL') in ('REFINED','CAMERA_MATCHED')
+    refined=recipe.get('look','ORIGINAL') in ('REFINED','CAMERA_MATCHED','WARM_TRACK')
     camera.location=(-22,-40,7.0);aim(camera,(-.8,0,2.5 if refined else 3.4))
     camera.rotation_euler=(camera.rotation_euler.to_quaternion() @ Quaternion((0,0,1),math.radians(6 if refined else 2.5))).to_euler()
     data.type='PERSP';data.lens=62 if refined else 55;data.sensor_width=36;data.shift_x=.08 if refined else .15;data.clip_end=500
     scene.camera=camera
-    if recipe.get('look')=='CAMERA_MATCHED':
+    if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
         from assembly_camera_match import configure_camera
-        configure_camera(scene,camera)
+        configure_camera(scene,camera,recipe['look'])
     bpy.context.view_layer.update()
     fit_reference_fixtures(scene)
     from assembly_realism import refine_environment,configure_lights
@@ -251,11 +251,12 @@ def build_scene(recipe,samples=96,scale=1):
     from camera_response import configure_camera_response
     configure_camera_response(scene,dict(environment='STUDIO',camera_softness=.5,resolution=scene.render.resolution_x))
     tree=scene.compositing_node_group
-    softness_scale=1.5 if recipe.get('look')=='CAMERA_MATCHED' else 2.4
+    softness_scale=1.5 if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK') else 2.4
+    if recipe.get('look')=='WARM_TRACK':softness_scale=1.7
     tree.nodes['PS_CR_Lens'].inputs['Size'].default_value=(recipe['environment']['softness_px']*softness_scale*scale*3,)*2
     tree.nodes['PS_CR_Lens'].mute=False;tree.nodes['PS_CR_Highlights'].mute=True
     scene.render.use_compositing=True
-    if recipe.get('look')=='CAMERA_MATCHED':
+    if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
         from assembly_camera_match import configure_plate
         configure_plate(scene,recipe)
     return scene,rig,body
@@ -305,7 +306,7 @@ def fit_reference_fixtures(scene):
 def pose_scene(scene,rig,body,recipe,pose):
     rig.rotation_euler=(pose['roll'],0,math.pi)
     rig.location=(0,pose['travel'],recipe['base']['radius'])
-    if recipe.get('look')=='CAMERA_MATCHED':
+    if recipe.get('look') in ('CAMERA_MATCHED','WARM_TRACK'):
         from assembly_camera_match import track_position
         rig.location.x,rig.location.y=track_position(scene,pose['travel'])
         pose['placement_model']='Image-constrained track corridor; nominal roll, inferred exterior geometry'

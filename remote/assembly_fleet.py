@@ -17,28 +17,28 @@ from assembly_plan import make_plan
 from assembly_generate import render_settings
 
 
-def make_node_plan(count, seed, samples=96):
+def make_node_plan(count, seed, samples=96, look='CAMERA_MATCHED', lighting='MIXED', defect_set='DENTS_FOLDS',strict=True):
     if not 1 <= count <= 100000:
         raise ValueError('Count per device must be between 1 and 100000')
     args = SimpleNamespace(count=count, seed=seed, samples=samples, scale=1,
-                           look='CAMERA_MATCHED', lighting='BALANCED', defect_set='DENTS_FOLDS')
-    rows = make_plan(count, seed, args.look, args.lighting, args.defect_set)
+                           look=look, lighting='BALANCED' if lighting=='MIXED' else lighting, defect_set=defect_set,strict_visibility=strict)
+    rows = make_plan(count, seed, args.look, args.lighting, args.defect_set,strict=strict)
     for row in rows:
         # Stable across a specimen's three views, independent of its class.
         value = int(hashlib.sha256((row['split_group'] + ':lighting').encode()).hexdigest()[:8], 16) / 2**32
-        lighting = 'BALANCED' if value < .70 else 'CURRENT' if value < .85 else 'FOUR_LINES'
+        selected = ('BALANCED' if value < .70 else 'CURRENT' if value < .85 else 'FOUR_LINES') if lighting=='MIXED' else lighting
         for recipe in [row['recipe']] + row['companions']:
-            recipe['lighting'] = lighting
+            recipe['lighting'] = selected
     return dict(pipeline='assembly', settings=render_settings(args), rows=rows,
-                policy=dict(lighting_weights=dict(BALANCED=.70, CURRENT=.15, FOUR_LINES=.15),
+                policy=dict(lighting_weights=dict(BALANCED=.70, CURRENT=.15, FOUR_LINES=.15) if lighting=='MIXED' else {lighting:1.0},
                             primary_conditions=dict(Counter(r['recipe']['condition'] for r in rows)),
                             lighting_counts=dict(Counter(r['recipe']['lighting'] for r in rows)),
-                            nominal_class_ratios=dict(dent=.45, deformity=.45, good=.10)))
+                            nominal_class_ratios=dict(dent=.45, deformity=.45, good=.10) if defect_set=='DENTS_FOLDS' else dict(dent=.225,ding=.225,scratch=.225,deformity=.225,good=.10)))
 
 
-def prepare(nodes, count, seed, samples=96):
+def prepare(nodes, count, seed, samples=96, look='CAMERA_MATCHED', lighting='MIXED', defect_set='DENTS_FOLDS'):
     # Separate ranges cover both primary and +100000 companion seeds.
-    plans = {name: make_node_plan(count, seed + index * 1000000, samples)
+    plans = {name: make_node_plan(count, seed + index * 1000000, samples, look, lighting, defect_set)
              for index, name in enumerate(nodes)}
     groups = [{recipe['specimen_id'] for row in plan['rows'] for recipe in [row['recipe']] + row['companions']}
               for plan in plans.values()]
@@ -49,7 +49,7 @@ def prepare(nodes, count, seed, samples=96):
     folder = ROOT / 'exports/fleet_runs' / job
     folder.mkdir(parents=True, exist_ok=False)
     settings = dict(job=job, pipeline='assembly', release=release, archive=str(archive), archive_sha256=archive_hash,
-                    nodes=nodes, count_per_node=count, samples=samples,
+                    nodes=nodes, count_per_node=count, samples=samples,look=look,lighting=lighting,defect_set=defect_set,
                     node_plan_sha256={name: digest_json(plan) for name, plan in plans.items()})
     write_json(folder / 'fleet.json', settings)
     for name, plan in plans.items():
@@ -100,6 +100,9 @@ def main():
     parser.add_argument('--count', type=int, default=5000, help='Images per selected device')
     parser.add_argument('--seed', type=int)
     parser.add_argument('--samples', type=int, default=96)
+    parser.add_argument('--look', choices=('ORIGINAL','REFINED','CAMERA_MATCHED','WARM_TRACK'),default='CAMERA_MATCHED')
+    parser.add_argument('--lighting', choices=('MIXED','CURRENT','FOUR_LINES','BALANCED'),default='MIXED')
+    parser.add_argument('--defect-set', choices=('ALL','DENTS_FOLDS'),default='DENTS_FOLDS')
     parser.add_argument('--run', type=Path)
     args = parser.parse_args()
     config = read_json(ROOT / 'fleet_nodes.local.json')
@@ -109,7 +112,7 @@ def main():
         states = parallel(nodes, lambda name, node: node_call(node, dict(action='status')))
         if failed_results(states) or any(s.get('running') for s in states.values()):
             raise RuntimeError('Selected devices must be reachable and idle: ' + json.dumps(states))
-        folder, settings = prepare(nodes, args.count, args.seed if args.seed is not None else secrets.randbelow(1_500_000_000), args.samples)
+        folder, settings = prepare(nodes, args.count, args.seed if args.seed is not None else secrets.randbelow(1_500_000_000), args.samples,args.look,args.lighting,args.defect_set)
         if args.action == 'prepare':
             print(folder); return
     else:

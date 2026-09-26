@@ -20,9 +20,10 @@ def parser():
     p.add_argument('--output',type=Path,default=ROOT/'exports'/('assembly_track_'+datetime.now().strftime('%Y%m%d_%H%M%S')))
     p.add_argument('--count',type=int,default=15,help='Total frames; 15 frames cover all five primary conditions')
     p.add_argument('--seed',type=int,default=260915)
-    p.add_argument('--look',choices=('ORIGINAL','REFINED','CAMERA_MATCHED'),default='CAMERA_MATCHED')
+    p.add_argument('--look',choices=('ORIGINAL','REFINED','CAMERA_MATCHED','WARM_TRACK'),default='CAMERA_MATCHED')
     p.add_argument('--lighting',choices=('CURRENT','FOUR_LINES','BALANCED'),default='BALANCED')
     p.add_argument('--defect-set',choices=('ALL','DENTS_FOLDS'),default='ALL',help='DENTS_FOLDS: 45%% dents, 45%% folds (deformity class), 10%% good')
+    p.add_argument('--strict-visibility',action=argparse.BooleanOptionalAction,default=True)
     p.add_argument('--samples',type=int,default=96)
     p.add_argument('--scale',type=int,choices=(1,2),default=1,help='1 = native 1920x1200; 2 = 3840x2400')
     p.add_argument('--open',action='store_true',help='Open the editable Blender scene instead of exporting')
@@ -53,12 +54,14 @@ def split_rows(rows):
 
 
 def finalize(root,plan):
-    infos=[json.loads((root/'metadata'/(r['sample_id']+'.json')).read_text()) for r in plan['rows']]
-    for name,rows in split_rows(plan['rows']).items():
+    accepted=[r for r in plan['rows'] if complete(root,r)]
+    infos=[json.loads((root/'metadata'/(r['sample_id']+'.json')).read_text()) for r in accepted]
+    if not infos:raise ValueError('No images passed visibility; inspect rejections before further generation')
+    for name,rows in split_rows(accepted).items():
         content=''.join('./all/images/'+r['sample_id']+'.png\n' for r in rows)
         for directory in (root,root/'tracking'):(directory/(name+'.txt')).write_text(content,encoding='utf-8')
     from collections import Counter
-    summary=dict(frames=len(infos),resolution=[infos[0]['width'],infos[0]['height']],
+    summary=dict(frames=len(infos),requested_candidates=len(plan['rows']),rejected=len(plan['rows'])-len(infos),resolution=[infos[0]['width'],infos[0]['height']],
         primary_conditions=dict(Counter(i['recipe']['condition'] for i in infos)),
         visible_defects=dict(Counter(a['name'] for i in infos for a in i['annotations'])),
         visible_parts=dict(Counter(a['name'] for i in infos for a in i['parts'])),
@@ -81,7 +84,17 @@ def complete(root,row):
     if not path.exists():return False
     try:
         data=json.loads(path.read_text(encoding='utf-8'))
+        if row['recipe'].get('quality_profile') and data.get('visibility_quality',{}).get('passed') is not True:return False
         return data['sample_id']==row['sample_id'] and all((root/k).is_file() and file_hash(root/k)==v for k,v in data['sha256'].items())
+    except (ValueError,KeyError,OSError):return False
+
+
+def finished(root,row):
+    if complete(root,row):return True
+    try:
+        from assembly_quality import row_digest
+        record=json.loads((root/'rejections'/(row['sample_id']+'.json')).read_text(encoding='utf-8'))
+        return record['planned_row_sha256']==row_digest(row) and record['state']=='rejected' and bool(record['attempts']) and all(a['passed'] is False for a in record['attempts'])
     except (ValueError,KeyError,OSError):return False
 
 
@@ -121,21 +134,15 @@ def export_row(scene,rig,body,row,root,scale,companions=()):
         defect_fraction=max([float(clipped[m].mean()) for k,m in masks.items() if '_defect_' in k and m.any()]+[0.0])
         history.append(dict(exposure=float(scene.view_settings.exposure),shell_clipped=fraction,defect_clipped=defect_fraction))
         if fraction<=.035 and defect_fraction<=.12:break
-        if attempt==3:raise ValueError('Specimen remains overexposed after bounded corrections: '+stem)
+        if attempt==3:
+            if recipe.get('quality_profile'):
+                from assembly_quality import AssemblyRejected,VERSION as QUALITY_VERSION
+                raise AssemblyRejected(dict(version=QUALITY_VERSION,sample_id=stem,passed=False,instances=[],reason='unresolved_glare',glare_checks=history))
+            raise ValueError('Specimen remains overexposed after bounded corrections: '+stem)
         scene.view_settings.exposure-=.4;sync_plate_view(scene);scene.render.filepath=str(path);bpy.ops.render.render(write_still=True)
-    # Subtle camera noise is applied to beauty only and varies per capture.
-    image=bpy.data.images.load(str(path),check_existing=False)
-    try:
-        pixels=np.empty(len(image.pixels),dtype=np.float32);image.pixels.foreach_get(pixels)
-        rgba=pixels.reshape(-1,4)
-        rng=np.random.default_rng(recipe['seed']*101+pose['frame_index'])
-        noise=rng.normal(0,recipe['environment']['noise'],rgba[:,:3].shape)*np.sqrt(np.maximum(rgba[:,:3],.015))
-        if scene.get('assembly_background_source'):
-            foreground=np.logical_or.reduce([m for k,m in masks.items() if k.endswith(('_shell','_ferrule'))])
-            noise*=foreground[::-1].reshape(-1,1)
-        rgba[:,:3]=np.clip(rgba[:,:3]+noise,0,1)
-        image.pixels.foreach_set(rgba.ravel());image.filepath_raw=str(path);image.file_format='PNG';image.save()
-    finally:bpy.data.images.remove(image)
+    from assembly_quality_render import camera_noise,evaluate
+    camera_noise(scene,path,recipe,pose,masks)
+    quality=evaluate(scene,objects,masks,path,scratch,stem) if recipe.get('quality_profile') else None
     width,height=NATIVE_SIZE[0]*scale,NATIVE_SIZE[1]*scale
     annotations=[];part_annotations=[];hidden=[]
     for obj_recipe,obj_pose,prefix,measured in per_specimen:
@@ -173,6 +180,9 @@ def export_row(scene,rig,body,row,root,scale,companions=()):
         material=body.data.materials[0]
         if material.get('assembly_finish_parameters'):
             info['surface_finish']=json.loads(material['assembly_finish_parameters'])
+    if quality is not None:
+        info['visibility_quality']=quality
+        info['visibility_attempts']=row.get('visibility_attempts',[])
     atomic_json(root/'metadata'/(stem+'.json'),info)
     scratch.rmdir()
     return info
@@ -197,11 +207,11 @@ def review(root):
 def render_settings(args):
     source_files=('assembly_plan.py','assembly_geometry.py','assembly_scene.py','assembly_generate.py','assembly_realism.py','assembly_dents.py','assembly_environment_detail.py','assembly_camera_match.py','assembly_finish.py',
                   'geometry.py','domain_geometry.py','brass_material.py','brass_realism.py','brass_spectrum.py','brass_microdetail.py',
-                  'camera_response.py','reference_brass_spectrum.json')
-    if args.look=='CAMERA_MATCHED':
-        from assembly_camera_match import PLATES
-        source_files+=tuple('assets/assembly_cam3936/'+name for name in PLATES)+('assets/assembly_cam3936/provenance.json',)
-    return dict(version=VERSION,count=args.count,seed=args.seed,samples=args.samples,scale=args.scale,look=args.look,lighting=args.lighting,defect_set=args.defect_set,
+                  'camera_response.py','reference_brass_spectrum.json','assembly_quality.py','assembly_quality_render.py','defect_visibility.py')
+    if args.look in ('CAMERA_MATCHED','WARM_TRACK'):
+        from assembly_camera_match import plate_assets
+        source_files+=plate_assets(args.look)
+    return dict(version=VERSION,count=args.count,seed=args.seed,samples=args.samples,scale=args.scale,look=args.look,lighting=args.lighting,defect_set=args.defect_set,strict_visibility=getattr(args,'strict_visibility',True),
                    renderer_sha256={name:file_hash(ROOT/name) for name in source_files})
 
 
@@ -224,7 +234,7 @@ def _worker(args):
         plan=json.loads(plan_path.read_text(encoding='utf-8'))
         if plan['settings']!=requested:raise ValueError('Existing output has a different plan. Choose a new output folder.')
     else:
-        plan=dict(settings=requested,rows=make_plan(args.count,args.seed,args.look,args.lighting,args.defect_set));atomic_json(plan_path,plan)
+        plan=dict(settings=requested,rows=make_plan(args.count,args.seed,args.look,args.lighting,args.defect_set,strict=args.strict_visibility));atomic_json(plan_path,plan)
     if args.open:
         row=plan['rows'][0];scene,rig,body=build_scene(row['recipe'],args.samples,args.scale)
         pose_scene(scene,rig,body,row['recipe'],row['pose'])
@@ -244,7 +254,7 @@ def _worker(args):
             if (root/'STOP').exists() or (args.fleet_plan and (root/'cancel.flag').exists()):
                 atomic_json(root/'status.json',dict(state='paused',completed=sum(complete(root,r) for r in plan['rows']),total=args.count));return
             if args.fleet_plan and index < args.verified_prefix:continue
-            if complete(root,row):continue
+            if finished(root,row):continue
             recipe=row['recipe']
             if cached != recipe['seed']:
                 scene,rig,body=build_scene(recipe,args.samples,args.scale);cached=recipe['seed']
@@ -260,11 +270,34 @@ def _worker(args):
                 scene.render.filepath=str(root/(row['sample_id']+'.png'));bpy.ops.render.render(write_still=True)
                 from pipe_studio import save_blend
                 save_blend(str(root/'assembly_track.blend'));return
-            export_row(scene,rig,body,row,root,args.scale,companions)
+            if recipe.get('quality_profile'):
+                from assembly_quality import AssemblyRejected,repair_row,row_digest
+                candidate=row;attempts=[]
+                for attempt in range(4):
+                    try:
+                        candidate={**candidate,'visibility_attempts':attempts}
+                        export_row(scene,rig,body,candidate,root,args.scale,companions)
+                        break
+                    except AssemblyRejected as error:
+                        attempts.append(error.report)
+                        reasons=sorted({reason for item in error.report.get('instances',[])
+                            for check in ('screen','counterfactual')
+                            for reason in item.get(check,{}).get('reasons',[])})
+                        print(f'ASSEMBLY_QA {row["sample_id"]} attempt={attempt+1} rejected: '
+                              + ', '.join(reasons or [error.report.get('reason','visibility')]),flush=True)
+                        if attempt==3:
+                            atomic_json(root/'rejections'/(row['sample_id']+'.json'),dict(state='rejected',
+                                sample_id=row['sample_id'],planned_row_sha256=row_digest(row),attempts=attempts))
+                            break
+                        candidate=repair_row(candidate,attempt+1)
+                        scene,rig,body=build_scene(candidate['recipe'],args.samples,args.scale)
+                        companions=[(*make_assembly(scene,r),r) for r in candidate.get('companions',[])]
+            else:export_row(scene,rig,body,row,root,args.scale,companions)
             atomic_json(root/'status.json',dict(state='running',completed=index+1,total=args.count,last_sample=row['sample_id']))
             if args.fleet_plan:
                 atomic_json(root/'progress.json',dict(state='running',completed=index+1,total=args.count,
-                    last_image=str(root/'all/images'/(row['sample_id']+'.png'))))
+                    accepted=len(list((root/'metadata').glob('*.json'))),rejected=len(list((root/'rejections').glob('*.json'))),
+                    last_image=str(root/'all/images'/(row['sample_id']+'.png')) if complete(root,row) else None))
             print(f'ASSEMBLY_PROGRESS {index+1}/{args.count}',flush=True)
             rendered+=1
             if args.chunk and rendered>=args.chunk:return
@@ -296,6 +329,7 @@ def main():
     command += ['--python-exit-code','1','--python',str(Path(__file__).resolve()),'--',
                 '--output',str(args.output.resolve()),'--count',str(args.count),'--seed',str(args.seed),
                 '--samples',str(args.samples),'--scale',str(args.scale),'--look',args.look,'--lighting',args.lighting,'--defect-set',args.defect_set]
+    if not args.strict_visibility:command.append('--no-strict-visibility')
     if args.open:command.append('--open')
     if args.resume:command.append('--resume')
     if args.beauty_only:command.append('--beauty-only')
